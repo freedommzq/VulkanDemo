@@ -1,0 +1,9 @@
+.vs/
+premake5.exe
+bin/
+intermediate/
+VulkanDemo.sln
+*.vcxproj
+*.filters
+*.user
+gpuCull/imgui.ini
