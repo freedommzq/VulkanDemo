@@ -32,6 +32,60 @@ public:
 	// The model contains multiple versions of a single object with different levels of detail
 	vkglTF::Model lodModel;
 
+	// gpuCull use 1*1*1 cube instead
+	VkBuffer cubeVertexBuffer;
+	VkDeviceMemory cubeVertexBufferMemory;
+
+	VkBuffer cubeIndexBuffer;
+	VkDeviceMemory cubeIndexBufferMemory;
+
+	struct Vertex {
+		glm::vec3 inPos;
+		glm::vec3 inNormal;
+		glm::vec3 inColor;
+	};
+	std::vector<Vertex> vertices = {
+		// front
+		{{-0.5f, -0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
+		{{ 0.5f, -0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
+		{{ 0.5f,  0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
+		{{-0.5f,  0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
+		// back
+		{{-0.5f, -0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
+		{{ 0.5f, -0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
+		{{ 0.5f,  0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
+		{{-0.5f,  0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
+		// left
+		{{-0.5f, -0.5f, -0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
+		{{-0.5f, -0.5f,  0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
+		{{-0.5f,  0.5f,  0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
+		{{-0.5f,  0.5f, -0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
+		// right
+		{{ 0.5f, -0.5f,  0.5f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
+		{{ 0.5f, -0.5f, -0.5f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
+		{{ 0.5f,  0.5f, -0.5f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
+		{{ 0.5f,  0.5f,  0.5f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
+		// top
+		{{-0.5f,  0.5f,  0.5f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
+		{{ 0.5f,  0.5f,  0.5f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
+		{{ 0.5f,  0.5f, -0.5f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
+		{{-0.5f,  0.5f, -0.5f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
+		// bottom
+		{{-0.5f, -0.5f, -0.5f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
+		{{ 0.5f, -0.5f, -0.5f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
+		{{ 0.5f, -0.5f,  0.5f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
+		{{-0.5f, -0.5f,  0.5f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
+	};
+
+	std::vector<uint32_t> indices = {
+		0, 1, 2, 0, 2, 3,
+		4, 7, 6, 4, 6, 5,
+		8, 9, 10, 8, 10, 11,
+		12, 13, 14, 12, 14, 15,
+		16, 17, 18, 16, 18, 19,
+		20, 21, 22, 20, 22, 23
+	};
+
 	// Per-instance data block
 	struct InstanceData {
 		glm::vec3 pos;
@@ -163,11 +217,14 @@ public:
 
 			// Mesh containing the LODs
 			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.plants);
-			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &lodModel.vertices.buffer, offsets);
+			//vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &lodModel.vertices.buffer, offsets);
+			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &cubeVertexBuffer, offsets);
 			vkCmdBindVertexBuffers(drawCmdBuffers[i], INSTANCE_BUFFER_BIND_ID, 1, &instanceBuffer.buffer, offsets);
 
-			vkCmdBindIndexBuffer(drawCmdBuffers[i], lodModel.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+			//vkCmdBindIndexBuffer(drawCmdBuffers[i], lodModel.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+			vkCmdBindIndexBuffer(drawCmdBuffers[i], cubeIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
+			/*
 			if (vulkanDevice->features.multiDrawIndirect)
 			{
 				vkCmdDrawIndexedIndirect(drawCmdBuffers[i], indirectCommandsBuffer.buffer, 0, indirectCommands.size(), sizeof(VkDrawIndexedIndirectCommand));
@@ -179,7 +236,9 @@ public:
 				{
 					vkCmdDrawIndexedIndirect(drawCmdBuffers[i], indirectCommandsBuffer.buffer, j * sizeof(VkDrawIndexedIndirectCommand), 1, sizeof(VkDrawIndexedIndirectCommand));
 				}
-			}
+			}			
+			*/
+			vkCmdDrawIndexed(drawCmdBuffers[i], indices.size(), indirectCommands.size(), 0, 0, 0);
 
 			drawUI(drawCmdBuffers[i]);
 
@@ -193,6 +252,69 @@ public:
 	{
 		const uint32_t glTFLoadingFlags = vkglTF::FileLoadingFlags::PreTransformVertices | vkglTF::FileLoadingFlags::PreMultiplyVertexColors | vkglTF::FileLoadingFlags::FlipY;
 		lodModel.loadFromFile(getAssetPath() + "models/suzanne_lods.gltf", vulkanDevice, queue, glTFLoadingFlags);
+
+		// load cube data to gpu
+		size_t vertexBufferSize = vertices.size() * sizeof(Vertex);
+		size_t indexBufferSize = indices.size() * sizeof(uint32_t);
+
+		assert((vertexBufferSize > 0) && (indexBufferSize > 0));
+
+		struct StagingBuffer {
+			VkBuffer buffer;
+			VkDeviceMemory memory;
+		} vertexStaging, indexStaging;
+
+		// Create staging buffers
+		// Vertex data
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			vertexBufferSize,
+			&vertexStaging.buffer,
+			&vertexStaging.memory,
+			vertices.data()));
+		// Index data
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			indexBufferSize,
+			&indexStaging.buffer,
+			&indexStaging.memory,
+			indices.data()));
+
+		// Create vulkanDevice local buffers
+		// Vertex buffer
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			vertexBufferSize,
+			&cubeVertexBuffer,
+			&cubeVertexBufferMemory));
+		// Index buffer
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			indexBufferSize,
+			&cubeIndexBuffer,
+			&cubeIndexBufferMemory));
+
+		// Copy from staging buffers
+		VkCommandBuffer copyCmd = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+		VkBufferCopy copyRegion = {};
+
+		copyRegion.size = vertexBufferSize;
+		vkCmdCopyBuffer(copyCmd, vertexStaging.buffer, cubeVertexBuffer, 1, &copyRegion);
+
+		copyRegion.size = indexBufferSize;
+		vkCmdCopyBuffer(copyCmd, indexStaging.buffer, cubeIndexBuffer, 1, &copyRegion);
+
+		vulkanDevice->flushCommandBuffer(copyCmd, queue, true);
+
+		vkDestroyBuffer(vulkanDevice->logicalDevice, vertexStaging.buffer, nullptr);
+		vkFreeMemory(vulkanDevice->logicalDevice, vertexStaging.memory, nullptr);
+		vkDestroyBuffer(vulkanDevice->logicalDevice, indexStaging.buffer, nullptr);
+		vkFreeMemory(vulkanDevice->logicalDevice, indexStaging.memory, nullptr);
 	}
 
 	void buildComputeCommandBuffer()
@@ -304,9 +426,13 @@ public:
 		attributeDescriptions = {
 		    // Per-vertex attributes
 		    // These are advanced for each vertex fetched by the vertex shader
-		    vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(vkglTF::Vertex, pos)),	// Location 0: Position
-		    vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(vkglTF::Vertex, normal)),	// Location 1: Normal
-		    vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 2, VK_FORMAT_R32G32B32_SFLOAT, offsetof(vkglTF::Vertex, color)),	// Location 2: Texture coordinates
+		    //vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(vkglTF::Vertex, pos)),	// Location 0: Position
+		    //vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(vkglTF::Vertex, normal)),	// Location 1: Normal
+		    //vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 2, VK_FORMAT_R32G32B32_SFLOAT, offsetof(vkglTF::Vertex, color)),	// Location 2: Texture coordinates
+
+			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, inPos)),	// Location 0: Position
+			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, inNormal)),	// Location 1: Normal
+			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 2, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, inColor)),	// Location 2: Texture coordinates
 		    // Per-Instance attributes
 		    // These are fetched for each instance rendered
 		    vks::initializers::vertexInputAttributeDescription(INSTANCE_BUFFER_BIND_ID, 4, VK_FORMAT_R32G32B32_SFLOAT, offsetof(InstanceData, pos)),	// Location 4: Position
@@ -341,8 +467,8 @@ public:
 		pipelineCreateInfo.pStages = shaderStages.data();
 
 		// Indirect (and instanced) pipeline for the plants
-		shaderStages[0] = loadShader(getShadersPath() + "computecullandlod/indirectdraw.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-		shaderStages[1] = loadShader(getShadersPath() + "computecullandlod/indirectdraw.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+		shaderStages[0] = loadShader(getShadersPath() + "gpuCull/indirectdraw.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+		shaderStages[1] = loadShader(getShadersPath() + "gpuCull/indirectdraw.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &pipelines.plants));
 	}
 
@@ -407,7 +533,7 @@ public:
 				{
 					uint32_t index = x + y * OBJECT_COUNT + z * OBJECT_COUNT * OBJECT_COUNT;
 					instanceData[index].pos = glm::vec3((float)x, (float)y, (float)z) - glm::vec3((float)OBJECT_COUNT / 2.0f);
-					instanceData[index].scale = 2.0f;
+					instanceData[index].scale = 0.1f;
 				}
 			}
 		}
@@ -574,7 +700,7 @@ public:
 
 		// Create pipeline
 		VkComputePipelineCreateInfo computePipelineCreateInfo = vks::initializers::computePipelineCreateInfo(compute.pipelineLayout, 0);
-		computePipelineCreateInfo.stage = loadShader(getShadersPath() + "computecullandlod/cull.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		computePipelineCreateInfo.stage = loadShader(getShadersPath() + "gpuCull/cull.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
 
 		// Use specialization constants to pass max. level of detail (determined by no. of meshes)
 		VkSpecializationMapEntry specializationEntry{};

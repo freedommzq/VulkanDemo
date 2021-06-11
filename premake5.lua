@@ -8,6 +8,10 @@ workspace "VulkanDemo"
         "Release"
     }
 
+    vpaths{
+        ["shaders"] = { "**.vert", "**.frag", "**.comp" }
+    }
+
     cfgDir = "%{cfg.buildcfg}-%{cfg.architecture}"
     vulkanLib = "C:/VulkanSDK/1.2.148.0/Lib/vulkan-1.lib"
 
@@ -55,7 +59,6 @@ workspace "VulkanDemo"
             "_WINDOWS",
             "VK_USE_PLATFORM_WIN32_KHR",
             "NOMINMAX",
-            "VK_EXAMPLE_DATA_DIR=\"D:/Vulkan/Vulkan/data/\""
         }
 
         filter "configurations:Debug"
@@ -82,7 +85,11 @@ workspace "VulkanDemo"
         objdir ("intermediate/"..cfgDir.."/%{prj.name}")
 
         files{
-            "%{prj.name}/**.cpp"
+            "%{prj.name}/**.cpp",
+
+            "data/shaders/%{prj.name}/**.vert",
+            "data/shaders/%{prj.name}/**.frag",
+            "data/shaders/%{prj.name}/**.comp",
         }
 
         includedirs{
@@ -103,7 +110,6 @@ workspace "VulkanDemo"
         }
 
         filter "configurations:Debug"
-            targetname "%{prj.name}d"
             symbols "on"
 
         filter "configurations:Release"
