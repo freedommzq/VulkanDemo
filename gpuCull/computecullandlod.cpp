@@ -22,7 +22,7 @@
 #define OBJECT_COUNT 64
 #endif
 
-#define MAX_LOD_LEVEL 5
+#define MAX_LOD_LEVEL 1
 
 class VulkanExample : public VulkanExampleBase
 {
@@ -40,50 +40,53 @@ public:
 	VkDeviceMemory cubeIndexBufferMemory;
 
 	struct Vertex {
-		glm::vec3 inPos;
+		glm::vec4 inPos;
 		glm::vec3 inNormal;
 		glm::vec3 inColor;
 	};
 	std::vector<Vertex> vertices = {
 		// front
-		{{-0.5f, -0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
-		{{ 0.5f, -0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
-		{{ 0.5f,  0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
-		{{-0.5f,  0.5f,  0.5f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
+		{{-0.5f, -0.5f,  0.5f,  1.0f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
+		{{ 0.5f, -0.5f,  0.5f,  1.0f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
+		{{ 0.5f,  0.5f,  0.5f,  1.0f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
+		{{-0.5f,  0.5f,  0.5f,  1.0f}, { 0.0f,  0.0f,  1.0f}, {1.0f, 0.0f, 0.0f}},
 		// back
-		{{-0.5f, -0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
-		{{ 0.5f, -0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
-		{{ 0.5f,  0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
-		{{-0.5f,  0.5f, -0.5f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
+		{{-0.5f, -0.5f, -0.5f,  1.0f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
+		{{ 0.5f, -0.5f, -0.5f,  1.0f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
+		{{ 0.5f,  0.5f, -0.5f,  1.0f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
+		{{-0.5f,  0.5f, -0.5f,  1.0f}, { 0.0f,  0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
 		// left
-		{{-0.5f, -0.5f, -0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
-		{{-0.5f, -0.5f,  0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
-		{{-0.5f,  0.5f,  0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
-		{{-0.5f,  0.5f, -0.5f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
+		{{-0.5f, -0.5f, -0.5f,  1.0f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
+		{{-0.5f, -0.5f,  0.5f,  1.0f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
+		{{-0.5f,  0.5f,  0.5f,  1.0f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
+		{{-0.5f,  0.5f, -0.5f,  1.0f}, {-1.0f,  0.0f,  0.0f}, {0.0f, 0.0f, 1.0f}},
 		// right
-		{{ 0.5f, -0.5f,  0.5f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
-		{{ 0.5f, -0.5f, -0.5f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
-		{{ 0.5f,  0.5f, -0.5f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
-		{{ 0.5f,  0.5f,  0.5f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
+		{{ 0.5f, -0.5f,  0.5f,  1.0f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
+		{{ 0.5f, -0.5f, -0.5f,  1.0f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
+		{{ 0.5f,  0.5f, -0.5f,  1.0f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
+		{{ 0.5f,  0.5f,  0.5f,  1.0f}, { 1.0f,  0.0f,  0.0f}, {1.0f, 1.0f, 0.0f}},
 		// top
-		{{-0.5f,  0.5f,  0.5f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
-		{{ 0.5f,  0.5f,  0.5f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
-		{{ 0.5f,  0.5f, -0.5f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
-		{{-0.5f,  0.5f, -0.5f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
+		{{-0.5f,  0.5f,  0.5f,  1.0f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
+		{{ 0.5f,  0.5f,  0.5f,  1.0f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
+		{{ 0.5f,  0.5f, -0.5f,  1.0f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
+		{{-0.5f,  0.5f, -0.5f,  1.0f}, { 0.0f,  1.0f,  0.0f}, {1.0f, 0.0f, 1.0f}},
 		// bottom
-		{{-0.5f, -0.5f, -0.5f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
-		{{ 0.5f, -0.5f, -0.5f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
-		{{ 0.5f, -0.5f,  0.5f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
-		{{-0.5f, -0.5f,  0.5f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
+		{{-0.5f, -0.5f, -0.5f,  1.0f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
+		{{ 0.5f, -0.5f, -0.5f,  1.0f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
+		{{ 0.5f, -0.5f,  0.5f,  1.0f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
+		{{-0.5f, -0.5f,  0.5f,  1.0f}, { 0.0f, -1.0f,  0.0f}, {0.0f, 1.0f, 1.0f}},
 	};
 
 	std::vector<uint32_t> indices = {
+		// LOD 0
 		0, 1, 2, 0, 2, 3,
 		4, 7, 6, 4, 6, 5,
 		8, 9, 10, 8, 10, 11,
 		12, 13, 14, 12, 14, 15,
 		16, 17, 18, 16, 18, 19,
-		20, 21, 22, 20, 22, 23
+		20, 21, 22, 20, 22, 23,
+		// LOD 1
+		0, 1, 2, 0, 2, 3
 	};
 
 	// Per-instance data block
@@ -107,11 +110,13 @@ public:
 	// Store the indirect draw commands containing index offsets and instance count per object
 	std::vector<VkDrawIndexedIndirectCommand> indirectCommands;
 
+	bool useBoundingAABB = true;
 	struct {
 		glm::mat4 projection;
 		glm::mat4 modelview;
 		glm::vec4 cameraPos;
 		glm::vec4 frustumPlanes[6];
+		uint32_t boundingAABB; // 1->BoundingAABBBox, 0->BoundingSphere, 对cube来说BoundingBox剔除的效果要好些，但从这个程序结果上看不出区别
 	} uboScene;
 
 	struct {
@@ -224,7 +229,6 @@ public:
 			//vkCmdBindIndexBuffer(drawCmdBuffers[i], lodModel.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
 			vkCmdBindIndexBuffer(drawCmdBuffers[i], cubeIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-			/*
 			if (vulkanDevice->features.multiDrawIndirect)
 			{
 				vkCmdDrawIndexedIndirect(drawCmdBuffers[i], indirectCommandsBuffer.buffer, 0, indirectCommands.size(), sizeof(VkDrawIndexedIndirectCommand));
@@ -236,9 +240,9 @@ public:
 				{
 					vkCmdDrawIndexedIndirect(drawCmdBuffers[i], indirectCommandsBuffer.buffer, j * sizeof(VkDrawIndexedIndirectCommand), 1, sizeof(VkDrawIndexedIndirectCommand));
 				}
-			}			
-			*/
-			vkCmdDrawIndexed(drawCmdBuffers[i], indices.size(), indirectCommands.size(), 0, 0, 0);
+			}
+			
+			//vkCmdDrawIndexed(drawCmdBuffers[i], indices.size(), objectCount, 0, 0, 0);
 
 			drawUI(drawCmdBuffers[i]);
 
@@ -417,7 +421,8 @@ public:
 		// The instancing pipeline uses a vertex input state with two bindings
 		bindingDescriptions = {
 		    // Binding point 0: Mesh vertex layout description at per-vertex rate
-		    vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(vkglTF::Vertex), VK_VERTEX_INPUT_RATE_VERTEX),
+		    //vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(vkglTF::Vertex), VK_VERTEX_INPUT_RATE_VERTEX),
+			vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX),
 		    // Binding point 1: Instanced data at per-instance rate
 		    vks::initializers::vertexInputBindingDescription(INSTANCE_BUFFER_BIND_ID, sizeof(InstanceData), VK_VERTEX_INPUT_RATE_INSTANCE)
 		};
@@ -444,7 +449,7 @@ public:
 		inputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
 
 		VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = vks::initializers::pipelineInputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
-		VkPipelineRasterizationStateCreateInfo rasterizationState = vks::initializers::pipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
+		VkPipelineRasterizationStateCreateInfo rasterizationState = vks::initializers::pipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_FRONT_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
 		VkPipelineColorBlendAttachmentState blendAttachmentState = vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
 		VkPipelineColorBlendStateCreateInfo colorBlendState = vks::initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentState);
 		VkPipelineDepthStencilStateCreateInfo depthStencilState = vks::initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
@@ -491,6 +496,10 @@ public:
 					uint32_t index = x + y * OBJECT_COUNT + z * OBJECT_COUNT * OBJECT_COUNT;
 					indirectCommands[index].instanceCount = 1;
 					indirectCommands[index].firstInstance = index;
+
+					//indirectCommands[index].firstIndex = 0;
+					//indirectCommands[index].indexCount = indices.size();
+
 					// firstIndex and indexCount are written by the compute shader
 				}
 			}
@@ -563,17 +572,15 @@ public:
 			float distance;
 			float _pad0;
 		};
-		std::vector<LOD> LODLevels;
+		constexpr int lodLevelMax = MAX_LOD_LEVEL + 1;
+		std::array<LOD, lodLevelMax> LODLevels;
 		uint32_t n = 0;
-		for (auto node : lodModel.nodes)
-		{
-			LOD lod;
-			lod.firstIndex = node->mesh->primitives[0]->firstIndex;	// First index for this LOD
-			lod.indexCount = node->mesh->primitives[0]->indexCount;	// Index count for this LOD
-			lod.distance = 5.0f + n * 5.0f;							// Starting distance (to viewer) for this LOD
-			n++;
-			LODLevels.push_back(lod);
-		}
+		LODLevels[0].firstIndex = 0;
+		LODLevels[0].indexCount = 36;
+		LODLevels[0].distance = 5.0f;
+		LODLevels[1].firstIndex = 36;
+		LODLevels[1].indexCount = 6;
+		LODLevels[1].distance = 1000.0f; // 这个距离不参与计算
 
 		VK_CHECK_RESULT(vulkanDevice->createBuffer(
 			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -700,7 +707,8 @@ public:
 
 		// Create pipeline
 		VkComputePipelineCreateInfo computePipelineCreateInfo = vks::initializers::computePipelineCreateInfo(compute.pipelineLayout, 0);
-		computePipelineCreateInfo.stage = loadShader(getShadersPath() + "gpuCull/cull.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		computePipelineCreateInfo.stage = loadShader(getShadersPath() + "gpuCull/cubeCull.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		//computePipelineCreateInfo.stage = loadShader(getShadersPath() + "gpuCull/cull.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
 
 		// Use specialization constants to pass max. level of detail (determined by no. of meshes)
 		VkSpecializationMapEntry specializationEntry{};
@@ -708,7 +716,7 @@ public:
 		specializationEntry.offset = 0;
 		specializationEntry.size = sizeof(uint32_t);
 
-		uint32_t specializationData = static_cast<uint32_t>(lodModel.nodes.size()) - 1;
+		uint32_t specializationData = MAX_LOD_LEVEL;
 
 		VkSpecializationInfo specializationInfo;
 		specializationInfo.mapEntryCount = 1;
@@ -759,6 +767,7 @@ public:
 				frustum.update(uboScene.projection * uboScene.modelview);
 				memcpy(uboScene.frustumPlanes, frustum.planes.data(), sizeof(glm::vec4) * 6);
 			}
+			uboScene.boundingAABB = useBoundingAABB ? 1 : 0;
 		}
 
 		memcpy(uniformData.scene.mapped, &uboScene, sizeof(uboScene));
@@ -841,6 +850,9 @@ public:
 	{
 		if (overlay->header("Settings")) {
 			if (overlay->checkBox("Freeze frustum", &fixedFrustum)) {
+				updateUniformBuffer(true);
+			}
+			if (overlay->checkBox("Use Bounding AABB Box", &useBoundingAABB)) {
 				updateUniformBuffer(true);
 			}
 		}
