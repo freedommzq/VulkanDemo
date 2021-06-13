@@ -10,8 +10,8 @@ gpuCull/imgui.ini
 data/models/
 data/shaders/glsl/
 data/textures/
-*.spv
 data/Roboto-Medium.ttf
 data/font.fnt
 data/README.md
 data/Robot-Medium-license.txt
+data/shaders/gpuCull/*.spv
