@@ -15,3 +15,7 @@ data/font.fnt
 data/README.md
 data/Robot-Medium-license.txt
 data/shaders/gpuCull/*.spv
+data/shaders/gpuCluster/cluster.comp.spv
+data/shaders/gpuCluster/scene.frag.spv
+data/shaders/gpuCluster/scene.vert.spv
+gpuCluster/imgui.ini

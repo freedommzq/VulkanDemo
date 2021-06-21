@@ -1,0 +1,63 @@
+#version 450
+
+layout (constant_id = 0) const uint MAX_LIST_SIZE = 20;
+layout (constant_id = 1) const uint lightCount = 1;
+
+struct Cluster{
+	uint size;
+	uint lights[MAX_LIST_SIZE];
+};
+layout(binding = 0) writeonly buffer Clusters{
+	Cluster clusters[];
+};
+
+struct Light{
+	vec4 sphere;
+	vec3 color;
+};
+layout(binding = 1) readonly buffer GlobalLights{
+	Light lights[];
+}globalLights;
+
+struct ClusterFrustum{
+	vec4 planes[6];
+};
+layout(binding = 2) readonly buffer ClusterFrustums{
+	ClusterFrustum frustums[];
+};
+
+layout(local_size_x = 16) in;
+
+// 平面法线均指向frustum内部
+bool frustumSphere(ClusterFrustum frustum, vec4 pos, float radius){
+	// Check sphere against frustum planes
+	for (int i = 0; i < 6; i++){
+		if (dot(pos, frustum.planes[i]) + radius < 0.0){
+			return false;
+		}
+	}
+	return true;
+}
+
+void main(){
+	uint clusterIndex = gl_GlobalInvocationID.x;
+
+	uint offset = 0;
+	uint size = 0;
+	ClusterFrustum frustum = frustums[clusterIndex];
+	for(uint i = 0; i < lightCount; ++i){
+		Light light = globalLights.lights[i];
+
+		if(frustumSphere(frustum, vec4(light.sphere.xyz, 1.0), light.sphere.w))
+		{
+			if(offset >= MAX_LIST_SIZE)
+				continue;
+
+			clusters[clusterIndex].lights[offset] = i;
+			++offset;
+			++size;
+		}
+	}
+
+	clusters[clusterIndex].size = size;
+}
