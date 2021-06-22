@@ -289,7 +289,7 @@ VulkanExample::VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	camera.type = Camera::CameraType::firstperson;
 	camera.flipY = true;
 	camera.setPosition(glm::vec3(0.0f, 1.0f, 0.0f));
-	//camera.setRotation(glm::vec3(0.0f, -90.0f, 0.0f));
+	camera.setRotation(glm::vec3(0.0f, -90.0f, 0.0f));
 	camera.setPerspective(60.0f, (float)width / (float)height, 0.1f, 256.0f);
 	settings.overlay = true;
 }
@@ -530,7 +530,7 @@ void VulkanExample::setupDescriptors()
 	// One ubo to pass dynamic data to the shader
 	// Two combined image samplers per material as each material uses color and normal maps
 	std::vector<VkDescriptorPoolSize> poolSizes = {
-		vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1),
+		vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2),
 		vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<uint32_t>(glTFScene.materials.size()) * 2),
 		vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3)
 	};
@@ -553,6 +553,7 @@ void VulkanExample::setupDescriptors()
 		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
 		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
 		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 2),
+		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 3),
 	};
 	descriptorSetLayoutCI = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings.data(), static_cast<uint32_t>(setLayoutBindings.size()));
 
@@ -592,10 +593,11 @@ void VulkanExample::setupDescriptors()
 	// Descriptor set for scene matrices
 	allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.matrices, 1);
 	VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
-	std::array<VkWriteDescriptorSet, 3> writeSets = {
+	std::array<VkWriteDescriptorSet, 4> writeSets = {
 		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &shaderData.buffer.descriptor),
 		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &clusterBuffer.descriptor),
 		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2, &lightBuffer.descriptor),
+		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3, &clusterCameraBuffer.descriptor),
 	};
 	vkUpdateDescriptorSets(device, writeSets.size(), writeSets.data(), 0, nullptr);
 
@@ -772,7 +774,7 @@ void VulkanExample::updateUniformBuffers()
 	memcpy(shaderData.buffer.mapped, &shaderData.values, sizeof(shaderData.values));
 }
 
-void VulkanExample::prepareBuffer()
+void VulkanExample::prepareClusterBuffers()
 {
 	vks::Buffer stagingBuffer;
 
@@ -791,11 +793,25 @@ void VulkanExample::prepareBuffer()
 		stagingBuffer.size));
 
 	// Light Buffer
-	globalLights.lights[0].sphere = glm::vec4(-2.0f, 3.0f, 0.0f, 5.0f);
+	globalLights.lights[0].sphere = glm::vec4(-4.0f, 2.0f, 0.0f, 4.0f);
 	globalLights.lights[0].color = glm::vec3(1.0f, 0.0f, 0.0f);
-	globalLights.lights[1].sphere = glm::vec4(0.0f, 2.0f, -2.0f, 3.0f);
+	globalLights.lights[1].sphere = glm::vec4(0.0f, 2.0f, 0.0f, 4.0f);
 	globalLights.lights[1].color = glm::vec3(0.0f, 1.0f, 0.0f);
-	globalLightCount = 2;
+	globalLights.lights[2].sphere = glm::vec4(4.0f, 2.0f, 0.0f, 4.0f);
+	globalLights.lights[2].color = glm::vec3(0.0f, 0.0f, 1.0f);
+	globalLights.lights[3].sphere = glm::vec4(-8.0f, 2.0f, 0.0f, 4.0f);
+	globalLights.lights[3].color = glm::vec3(1.0f, 1.0f, 0.0f);
+	globalLights.lights[4].sphere = glm::vec4(8.0f, 2.0f, 0.0f, 4.0f);
+	globalLights.lights[4].color = glm::vec3(0.0f, 1.0f, 1.0f);
+
+	globalLights.lights[5].sphere = glm::vec4(8.0f, 2.0f, 0.0f, 4.0f);
+	globalLights.lights[5].color = glm::vec3(1.0f, 1.0f, 1.0f);
+	globalLights.lights[6].sphere = glm::vec4(8.0f, 2.0f, 0.0f, 4.0f);
+	globalLights.lights[6].color = glm::vec3(1.0f, 1.0f, 1.0f);
+	globalLights.lights[7].sphere = glm::vec4(8.0f, 2.0f, 0.0f, 4.0f);
+	globalLights.lights[7].color = glm::vec3(1.0f, 1.0f, 1.0f);
+
+	globalLightCount = 8;
 
 	VK_CHECK_RESULT(vulkanDevice->createBuffer(
 		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -822,6 +838,16 @@ void VulkanExample::prepareBuffer()
 	frustumBuffer.map();
 	updateClusterFrustum();
 
+	// Cluster Camera Buffer
+	VK_CHECK_RESULT(vulkanDevice->createBuffer(
+		VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+		&clusterCameraBuffer,
+		sizeof(ClusterCamera)));
+
+	clusterCameraBuffer.map();
+	updateClusterCamera(showCluster, isClusterFreeze);
+
 	stagingBuffer.destroy();
 }
 
@@ -831,7 +857,7 @@ void VulkanExample::prepare()
 	loadAssets();
 	
 	prepareUniformBuffers();
-	prepareBuffer();
+	prepareClusterBuffers();
 
 	setupDescriptors();
 	preparePipelines();
@@ -887,38 +913,21 @@ void VulkanExample::render()
 
 	if (camera.updated) {
 		updateUniformBuffers();
-		updateClusterFrustum();
+		if(!isClusterFreeze)
+			updateClusterFrustum();
 	}
 }
 
 void VulkanExample::OnUpdateUIOverlay(vks::UIOverlay* overlay)
 {
-	/*
-	if (overlay->header("Visibility")) {
-
-		if (overlay->button("All")) {
-			std::for_each(glTFScene.nodes.begin(), glTFScene.nodes.end(), [](VulkanglTFScene::Node &node) { node.visible = true; });
-			buildCommandBuffers();
+	if (overlay->header("Setting")) {
+		if (overlay->checkBox("Show Cluster", &showCluster)) {
+			updateClusterCamera(showCluster, isClusterFreeze);
 		}
-		ImGui::SameLine();
-		if (overlay->button("None")) {
-			std::for_each(glTFScene.nodes.begin(), glTFScene.nodes.end(), [](VulkanglTFScene::Node &node) { node.visible = false; });
-			buildCommandBuffers();
+		if (overlay->checkBox("Cluster Freeze", &isClusterFreeze)) {
+			updateClusterCamera(showCluster, isClusterFreeze);
 		}
-		ImGui::NewLine();
-
-		// POI: Create a list of glTF nodes for visibility toggle
-		ImGui::BeginChild("#nodelist", ImVec2(200.0f, 340.0f), false);
-		for (auto &node : glTFScene.nodes)
-		{		
-			if (overlay->checkBox(node.name.c_str(), &node.visible))
-			{
-				buildCommandBuffers();
-			}
-		}
-		ImGui::EndChild();
-	}	
-	*/
+	}
 }
 
 VULKAN_EXAMPLE_MAIN()
@@ -979,4 +988,25 @@ void VulkanExample::updateClusterFrustum()
 			);
 	}
 	frustumBuffer.copyTo(frustums.data(), frustums.size() * sizeof(Frustum));
+}
+
+void VulkanExample::updateClusterCamera(bool showCluster, bool isFreeze)
+{
+	if (showCluster) {
+		clusterCamera.showCluster = 1;
+		if (isFreeze) {
+			clusterCamera.isFreeze = 1;
+			clusterCamera.view = camera.matrices.view;
+			clusterCamera.proj = camera.matrices.perspective;
+		}
+		else {
+			clusterCamera.isFreeze = 0;
+		}
+	}
+	else {
+		clusterCamera.showCluster = 0;
+		clusterCamera.isFreeze = 0;
+	}
+
+	clusterCameraBuffer.copyTo(&clusterCamera, sizeof(ClusterCamera));
 }

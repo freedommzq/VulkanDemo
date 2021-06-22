@@ -161,7 +161,7 @@ public:
 	void prepareCluster();
 	void prepareUniformBuffers();
 	void updateUniformBuffers();
-	void prepareBuffer();
+	void prepareClusterBuffers();
 	void prepare();
 	virtual void render();
 	virtual void OnUpdateUIOverlay(vks::UIOverlay* overlay);
@@ -212,8 +212,22 @@ public:
 	VkQueue computeQueue;
 	VkCommandPool computeCmdPool;
 
+	struct ClusterCamera {
+		glm::mat4 view;
+		glm::mat4 proj;
+		uint32_t isFreeze;
+		uint32_t showCluster;
+	}clusterCamera;
+
+	vks::Buffer clusterCameraBuffer;
+
+	// imgui update
+	bool showCluster = false;
+	bool isClusterFreeze = false;
+
 private:
 	void updateClusterFrustum();
+	void updateClusterCamera(bool showCluster, bool isFreeze);
 	inline glm::vec4 calPlane(glm::vec3 v1, glm::vec3 v2, glm::vec3 v3) {
 		glm::vec3 normal = normalize(cross(v3 - v1, v2 - v1));
 		return glm::vec4(normal, -dot(normal, v1));

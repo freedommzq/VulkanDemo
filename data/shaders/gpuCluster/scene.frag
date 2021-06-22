@@ -42,6 +42,13 @@ layout(set = 0, binding = 2) readonly buffer GlobalLights{
 	Light lights[];
 }globalLights;
 
+layout(set = 0, binding = 3) uniform ClusterCamera{
+	mat4 view;
+	mat4 projection;
+	uint isFreeze;
+	uint showCluster;
+}clusterCamera;
+
 float linearDepth(float z){
     z = z * 2.0 - 1.0; // Back to NDC 
     return (2.0 * NEAR * FAR) / (FAR + NEAR - z * (FAR - NEAR));
@@ -67,36 +74,49 @@ void main()
 
 	// º∆À„clusterIndex
 	vec3 uvw;
-	uvw.xy = gl_FragCoord.xy / vec2(WIDTH, HEIGHT);
-	uvw.z = (linearDepth(gl_FragCoord.z) - NEAR) / (FAR - NEAR);
+	if(clusterCamera.showCluster == 1 && clusterCamera.isFreeze == 1){
+		vec4 eyePos = clusterCamera.view * vec4(inPos, 1.0);
+		vec4 clipPos = clusterCamera.projection * eyePos;
+		vec3 ndcPos = clipPos.xyz / clipPos.w;
+		uvw.xy = ndcPos.xy * 0.5 + 0.5;
+		uvw.z = (eyePos.z - NEAR) / (FAR - NEAR);
+	}
+	else{
+		uvw.xy = gl_FragCoord.xy / vec2(WIDTH, HEIGHT);
+		uvw.z = (linearDepth(gl_FragCoord.z) - NEAR) / (FAR - NEAR);	
+	}
 
 	uvec3 clusterIndex = uvec3(uvw * uvec3(CLUSTER_X, CLUSTER_Y, CLUSTER_Z));
 	uint index = clusterIndex.z * CLUSTER_Y * CLUSTER_X + clusterIndex.y * CLUSTER_X + clusterIndex.x;
-
-	vec3 totalDiff = vec3(0.0);
-	vec3 totalSpec = vec3(0.0);
 	Cluster cluster = clusters[index];
-	for(uint i = 0; i < cluster.size; ++i){
-		if(cluster.lights[i] >= MAX_LIGHT_SIZE)
-			continue;
 
-		Light light = globalLights.lights[cluster.lights[i]];
+	if(clusterCamera.showCluster == 0){
+		vec3 totalDiff = vec3(0.0);
+		vec3 totalSpec = vec3(0.0);
+		for(uint i = 0; i < cluster.size; ++i){
+			if(cluster.lights[i] >= MAX_LIGHT_SIZE)
+				continue;
 
-		float distance = length(light.sphere.xyz - inPos);
-		if(distance < light.sphere.w){
-			vec3 L = normalize(light.sphere.xyz - inPos);
-			float diff = max(dot(N, L), 0.0);
-			vec3 H = normalize(V + L);
-			float spec = pow(max(dot(N, H), 0.0), 32.0);
+			Light light = globalLights.lights[cluster.lights[i]];
 
-			//float attenuation = 1.0 / (1.0 + distance * distance);
-			float attenuation = 1.0;
+			float distance = length(light.sphere.xyz - inPos);
+			if(distance < light.sphere.w){
+				vec3 L = normalize(light.sphere.xyz - inPos);
+				float diff = max(dot(N, L), 0.0);
+				vec3 H = normalize(V + L);
+				float spec = pow(max(dot(N, H), 0.0), 32.0);
 
-			totalDiff += diff * light.color * attenuation;
-			totalSpec += spec * light.color * attenuation;
+				float attenuation = 1.0 / (1.0 + 0.1 * distance * distance);
+				//float attenuation = 1.0;
+
+				totalDiff += diff * light.color * attenuation;
+				totalSpec += spec * light.color * attenuation;
+			}
 		}
-	}
 
-	const vec3 ambient = vec3(0.3);
-	outFragColor = vec4((ambient + totalDiff) * color.rgb + totalSpec, color.a);
+		const vec3 ambient = vec3(0.3);
+		outFragColor = vec4((ambient + totalDiff) * color.rgb + totalSpec, color.a);	
+	}
+	else
+		outFragColor = vec4(vec3(0.1 * cluster.size, 0.0, 0.0) + 0.1 * color.rgb, 1.0);
 }
