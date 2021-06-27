@@ -313,15 +313,26 @@ void VulkanExample::buildClusterCommandBuffer()
 
 	VK_CHECK_RESULT(vkBeginCommandBuffer(clusterCmdBuffer, &cmdBufInfo));
 
-	// Add memory barrier to ensure that the indirect commands have been consumed before the compute shader updates them
-	std::array<VkBufferMemoryBarrier, 1> barriersBefore{};
-	barriersBefore[0] = vks::initializers::bufferMemoryBarrier();
-	barriersBefore[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-	barriersBefore[0].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-	barriersBefore[0].srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.graphics;
-	barriersBefore[0].dstQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;
-	barriersBefore[0].buffer = clusterBuffer.buffer;
-	barriersBefore[0].size = clusterBuffer.size;
+	// Add memory barrier to ensure that the clusterImage and clusterDataBuffer have been consumed before the compute shader updates them
+	std::array<VkImageMemoryBarrier, 1> imageBarriersBefore{};
+	imageBarriersBefore[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	imageBarriersBefore[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	imageBarriersBefore[0].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	imageBarriersBefore[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL; // todo: using general image layout for simplicity
+	imageBarriersBefore[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+	imageBarriersBefore[0].srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.graphics;
+	imageBarriersBefore[0].dstQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;
+	imageBarriersBefore[0].image = clusterImage.image;
+	imageBarriersBefore[0].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+	std::array<VkBufferMemoryBarrier, 1> bufferBarriersBefore{};
+	bufferBarriersBefore[0] = vks::initializers::bufferMemoryBarrier();
+	bufferBarriersBefore[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	bufferBarriersBefore[0].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	bufferBarriersBefore[0].srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.graphics;
+	bufferBarriersBefore[0].dstQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;
+	bufferBarriersBefore[0].buffer = clusterDataBuffer.buffer;
+	bufferBarriersBefore[0].size = clusterDataBuffer.size;
 
 	// since light is static, no barrier is needed for light buffer
 
@@ -333,23 +344,34 @@ void VulkanExample::buildClusterCommandBuffer()
 		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 		VK_FLAGS_NONE,
 		0, nullptr,
-		barriersBefore.size(), barriersBefore.data(),
-		0, nullptr);
+		bufferBarriersBefore.size(), bufferBarriersBefore.data(),
+		imageBarriersBefore.size(), imageBarriersBefore.data());
 
 	vkCmdBindPipeline(clusterCmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, clusterPipeline);
 	vkCmdBindDescriptorSets(clusterCmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, clusterPipelineLayout, 0, 1, &clusterDS, 0, 0);
 
 	vkCmdDispatch(clusterCmdBuffer, CLUSTER_SIZE / 16, 1, 1);
 
-	// Add memory barrier to ensure that the compute shader has finished writing the indirect command buffer before it's consumed
-	std::array<VkBufferMemoryBarrier, 1> barriersAfter{};
-	barriersAfter[0] = vks::initializers::bufferMemoryBarrier();
-	barriersAfter[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-	barriersAfter[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-	barriersAfter[0].srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;
-	barriersAfter[0].dstQueueFamilyIndex = vulkanDevice->queueFamilyIndices.graphics;
-	barriersAfter[0].buffer = clusterBuffer.buffer;
-	barriersAfter[0].size = clusterBuffer.size;
+	// Add memory barrier to ensure that the compute shader has finished writing the clusterImage and clusterDataBuffer before it's consumed
+	std::array<VkImageMemoryBarrier, 1> imageBarriersAfter{};
+	imageBarriersAfter[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	imageBarriersAfter[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	imageBarriersAfter[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	imageBarriersAfter[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL; // todo: using general image layout for simplicity
+	imageBarriersAfter[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+	imageBarriersAfter[0].srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.graphics;
+	imageBarriersAfter[0].dstQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;
+	imageBarriersAfter[0].image = clusterImage.image;
+	imageBarriersAfter[0].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+	std::array<VkBufferMemoryBarrier, 1> bufferBarriersAfter{};
+	bufferBarriersAfter[0] = vks::initializers::bufferMemoryBarrier();
+	bufferBarriersAfter[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	bufferBarriersAfter[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	bufferBarriersAfter[0].srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;
+	bufferBarriersAfter[0].dstQueueFamilyIndex = vulkanDevice->queueFamilyIndices.graphics;
+	bufferBarriersAfter[0].buffer = clusterDataBuffer.buffer;
+	bufferBarriersAfter[0].size = clusterDataBuffer.size;
 
 	vkCmdPipelineBarrier(
 		clusterCmdBuffer,
@@ -357,8 +379,9 @@ void VulkanExample::buildClusterCommandBuffer()
 		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
 		VK_FLAGS_NONE,
 		0, nullptr,
-		barriersAfter.size(), barriersAfter.data(),
-		0, nullptr);
+		bufferBarriersAfter.size(), bufferBarriersAfter.data(),
+		imageBarriersAfter.size(), imageBarriersAfter.data()
+	);
 
 	vkEndCommandBuffer(clusterCmdBuffer);
 }
@@ -531,8 +554,9 @@ void VulkanExample::setupDescriptors()
 	// Two combined image samplers per material as each material uses color and normal maps
 	std::vector<VkDescriptorPoolSize> poolSizes = {
 		vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2),
-		vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<uint32_t>(glTFScene.materials.size()) * 2),
-		vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3)
+		vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<uint32_t>(glTFScene.materials.size()) * 2 + 1),
+		vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3),
+		vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1)
 	};
 	// One set for matrices and one per model image/texture
 	const uint32_t maxSetCount = static_cast<uint32_t>(glTFScene.images.size()) + 2;
@@ -540,9 +564,10 @@ void VulkanExample::setupDescriptors()
 	VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 
 	std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
-	vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 0),
-	vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1),
-	vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 2),
+		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 0),
+		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1),
+		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 2),
+		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 3)
 	};
 	VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCI = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings.data(), static_cast<uint32_t>(setLayoutBindings.size()));
 
@@ -551,9 +576,10 @@ void VulkanExample::setupDescriptors()
 	// Descriptor set layout for passing matrices
 	setLayoutBindings = {
 		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
-		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
+		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
 		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 2),
-		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 3),
+		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 3),
+		vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 4)
 	};
 	descriptorSetLayoutCI = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings.data(), static_cast<uint32_t>(setLayoutBindings.size()));
 
@@ -583,21 +609,23 @@ void VulkanExample::setupDescriptors()
 
 	VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &clusterDSLayout, 1);
 	VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &clusterDS));
-	std::array<VkWriteDescriptorSet, 3> writeClusterSets = {
-		vks::initializers::writeDescriptorSet(clusterDS, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, &clusterBuffer.descriptor),
-		vks::initializers::writeDescriptorSet(clusterDS, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &lightBuffer.descriptor),
-		vks::initializers::writeDescriptorSet(clusterDS, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2, &frustumBuffer.descriptor),
+	std::array<VkWriteDescriptorSet, 4> writeClusterSets = {
+		vks::initializers::writeDescriptorSet(clusterDS, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 0, &clusterImage.descriptor),
+		vks::initializers::writeDescriptorSet(clusterDS, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &clusterDataBuffer.descriptor),
+		vks::initializers::writeDescriptorSet(clusterDS, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2, &lightBuffer.descriptor),
+		vks::initializers::writeDescriptorSet(clusterDS, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3, &frustumBuffer.descriptor)
 	};
 	vkUpdateDescriptorSets(device, writeClusterSets.size(), writeClusterSets.data(), 0, nullptr);
 
 	// Descriptor set for scene matrices
 	allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.matrices, 1);
 	VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
-	std::array<VkWriteDescriptorSet, 4> writeSets = {
+	std::array<VkWriteDescriptorSet, 5> writeSets = {
 		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &shaderData.buffer.descriptor),
-		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &clusterBuffer.descriptor),
-		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2, &lightBuffer.descriptor),
-		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3, &clusterCameraBuffer.descriptor),
+		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &clusterImage.descriptor),
+		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2, &clusterDataBuffer.descriptor),
+		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3, &lightBuffer.descriptor),
+		vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &clusterCameraBuffer.descriptor)
 	};
 	vkUpdateDescriptorSets(device, writeSets.size(), writeSets.data(), 0, nullptr);
 
@@ -710,14 +738,23 @@ void VulkanExample::preparePipelines()
 	struct ClusterSpecializationData {
 		uint32_t maxListSize;
 		uint32_t globalLightCount;
+		uint32_t clusterX;
+		uint32_t clusterY;
+		uint32_t clusterZ;
 	} clusterSpecializationData;
 
 	clusterSpecializationData.maxListSize = MAX_LIST_SIZE;
 	clusterSpecializationData.globalLightCount = globalLightCount;
+	clusterSpecializationData.clusterX = CLUSTER_X;
+	clusterSpecializationData.clusterY = CLUSTER_Y;
+	clusterSpecializationData.clusterZ = CLUSTER_Z;
 
 	std::vector<VkSpecializationMapEntry> specializationMapEntries = {
 		vks::initializers::specializationMapEntry(0, offsetof(ClusterSpecializationData, maxListSize), sizeof(ClusterSpecializationData::maxListSize)),
 		vks::initializers::specializationMapEntry(1, offsetof(ClusterSpecializationData, globalLightCount), sizeof(ClusterSpecializationData::globalLightCount)),
+		vks::initializers::specializationMapEntry(2, offsetof(ClusterSpecializationData, clusterX), sizeof(ClusterSpecializationData::clusterX)),
+		vks::initializers::specializationMapEntry(3, offsetof(ClusterSpecializationData, clusterY), sizeof(ClusterSpecializationData::clusterY)),
+		vks::initializers::specializationMapEntry(4, offsetof(ClusterSpecializationData, clusterZ), sizeof(ClusterSpecializationData::clusterZ))
 	};
 	VkSpecializationInfo specializationInfo = vks::initializers::specializationInfo(specializationMapEntries, sizeof(clusterSpecializationData), &clusterSpecializationData);
 
@@ -778,19 +815,13 @@ void VulkanExample::prepareClusterBuffers()
 {
 	vks::Buffer stagingBuffer;
 
-	// Cluster Buffer
+	// Cluster Data Buffer
 	VK_CHECK_RESULT(vulkanDevice->createBuffer(
-		VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-		&stagingBuffer,
-		CLUSTER_SIZE * sizeof(Cluster),
-		clusters));
-
-	VK_CHECK_RESULT(vulkanDevice->createBuffer(
-		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-		&clusterBuffer,
-		stagingBuffer.size));
+		&clusterDataBuffer,
+		CLUSTER_SIZE * sizeof(ClusterData)
+	));
 
 	// Light Buffer
 	globalLights.lights[0].sphere = glm::vec4(-4.0f, 2.0f, 0.0f, 4.0f);
@@ -846,9 +877,75 @@ void VulkanExample::prepareClusterBuffers()
 		sizeof(ClusterCamera)));
 
 	clusterCameraBuffer.map();
-	updateClusterCamera(showCluster, isClusterFreeze);
+	updateClusterCamera(showCluster);
 
 	stagingBuffer.destroy();
+}
+
+void VulkanExample::prepareClusterImages()
+{
+	// Cluster Image
+	VkFormat clusterImageFormat = VK_FORMAT_R16_UINT;
+	clusterImage.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+	// Get device properties for the requested texture format
+	VkFormatProperties formatProperties;
+	vkGetPhysicalDeviceFormatProperties(physicalDevice, clusterImageFormat, &formatProperties);
+	// Check if requested image format supports image storage operations
+	assert(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
+
+	VkImageCreateInfo imageInfo = vks::initializers::imageCreateInfo();
+	imageInfo.imageType = VK_IMAGE_TYPE_3D;
+	imageInfo.format = clusterImageFormat;
+	imageInfo.extent = { CLUSTER_X, CLUSTER_Y, CLUSTER_Z };
+	imageInfo.mipLevels = 1;
+	imageInfo.arrayLayers = 1;
+	imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+	imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+	imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+	imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	VK_CHECK_RESULT(vkCreateImage(device, &imageInfo, nullptr, &clusterImage.image));
+
+	VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+	VkMemoryRequirements memReq;
+	vkGetImageMemoryRequirements(device, clusterImage.image, &memReq);
+	memAllocInfo.allocationSize = memReq.size;
+	memAllocInfo.memoryTypeIndex = vulkanDevice->getMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+	VK_CHECK_RESULT(vkAllocateMemory(device, &memAllocInfo, nullptr, &clusterImage.deviceMemory));
+
+	VK_CHECK_RESULT(vkBindImageMemory(device, clusterImage.image, clusterImage.deviceMemory, 0));
+
+	auto layoutCmd = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+	vks::tools::setImageLayout(layoutCmd, clusterImage.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, clusterImage.imageLayout);
+	vulkanDevice->flushCommandBuffer(layoutCmd, queue, true);
+
+	auto imageViewInfo = vks::initializers::imageViewCreateInfo();
+	imageViewInfo.image = clusterImage.image;
+	imageViewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+	imageViewInfo.format = clusterImageFormat;
+	imageViewInfo.components = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A };
+	imageViewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+	VK_CHECK_RESULT(vkCreateImageView(device, &imageViewInfo, nullptr, &clusterImage.view));
+
+	auto samplerInfo = vks::initializers::samplerCreateInfo();
+	samplerInfo.magFilter = VK_FILTER_NEAREST;
+	samplerInfo.minFilter = VK_FILTER_NEAREST;
+	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+	samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+	samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+	samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+	samplerInfo.mipLodBias = 0.0f;
+	samplerInfo.anisotropyEnable = false;
+	samplerInfo.compareEnable = false;
+	samplerInfo.compareOp = VK_COMPARE_OP_NEVER;
+	samplerInfo.minLod = 0.0f;
+	samplerInfo.maxLod = 0.0f;
+	samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+	VK_CHECK_RESULT(vkCreateSampler(device, &samplerInfo, nullptr, &clusterImage.sampler));
+
+	clusterImage.descriptor.imageView = clusterImage.view;
+	clusterImage.descriptor.sampler = clusterImage.sampler;
+	clusterImage.descriptor.imageLayout = clusterImage.imageLayout;
 }
 
 void VulkanExample::prepare()
@@ -858,6 +955,7 @@ void VulkanExample::prepare()
 	
 	prepareUniformBuffers();
 	prepareClusterBuffers();
+	prepareClusterImages();
 
 	setupDescriptors();
 	preparePipelines();
@@ -913,8 +1011,7 @@ void VulkanExample::render()
 
 	if (camera.updated) {
 		updateUniformBuffers();
-		if(!isClusterFreeze)
-			updateClusterFrustum();
+		updateClusterFrustum();
 	}
 }
 
@@ -922,10 +1019,7 @@ void VulkanExample::OnUpdateUIOverlay(vks::UIOverlay* overlay)
 {
 	if (overlay->header("Setting")) {
 		if (overlay->checkBox("Show Cluster", &showCluster)) {
-			updateClusterCamera(showCluster, isClusterFreeze);
-		}
-		if (overlay->checkBox("Cluster Freeze", &isClusterFreeze)) {
-			updateClusterCamera(showCluster, isClusterFreeze);
+			updateClusterCamera(showCluster);
 		}
 	}
 }
@@ -990,22 +1084,13 @@ void VulkanExample::updateClusterFrustum()
 	frustumBuffer.copyTo(frustums.data(), frustums.size() * sizeof(Frustum));
 }
 
-void VulkanExample::updateClusterCamera(bool showCluster, bool isFreeze)
+void VulkanExample::updateClusterCamera(bool showCluster)
 {
 	if (showCluster) {
 		clusterCamera.showCluster = 1;
-		if (isFreeze) {
-			clusterCamera.isFreeze = 1;
-			clusterCamera.view = camera.matrices.view;
-			clusterCamera.proj = camera.matrices.perspective;
-		}
-		else {
-			clusterCamera.isFreeze = 0;
-		}
 	}
 	else {
 		clusterCamera.showCluster = 0;
-		clusterCamera.isFreeze = 0;
 	}
 
 	clusterCameraBuffer.copyTo(&clusterCamera, sizeof(ClusterCamera));

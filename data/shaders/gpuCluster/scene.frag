@@ -24,13 +24,14 @@ layout (constant_id = 8) const uint CLUSTER_Z = 0;
 const uint MAX_LIST_SIZE = 20;
 const uint MAX_LIGHT_SIZE = 1000;
 
-// cluster buffer
-struct Cluster{
-	uint size;
+layout(set = 0, binding = 1) uniform usampler3D samplerClusterMap;
+
+// cluster data buffer
+struct ClusterData{
 	uint lights[MAX_LIST_SIZE];
 };
-layout(set = 0, binding = 1) readonly buffer Clusters{
-	Cluster clusters[];
+layout(set = 0, binding = 2) readonly buffer ClusterDatas{
+	ClusterData clusterDatas[];
 };
 
 // light buffer
@@ -38,14 +39,11 @@ struct Light{
 	vec4 sphere;
 	vec3 color;
 };
-layout(set = 0, binding = 2) readonly buffer GlobalLights{
+layout(set = 0, binding = 3) readonly buffer GlobalLights{
 	Light lights[];
 }globalLights;
 
-layout(set = 0, binding = 3) uniform ClusterCamera{
-	mat4 view;
-	mat4 projection;
-	uint isFreeze;
+layout(set = 0, binding = 4) uniform ClusterCamera{
 	uint showCluster;
 }clusterCamera;
 
@@ -64,6 +62,17 @@ void main()
 		}
 	}
 
+	// º∆À„clusterIndex
+	vec3 uvw;
+	uvw.xy = gl_FragCoord.xy / vec2(WIDTH, HEIGHT);
+	uvw.z = (linearDepth(gl_FragCoord.z) - NEAR) / (FAR - NEAR);	
+
+	uvec3 clusterIndex = uvec3(uvw * uvec3(CLUSTER_X, CLUSTER_Y, CLUSTER_Z));
+	uint index = clusterIndex.z * CLUSTER_Y * CLUSTER_X + clusterIndex.y * CLUSTER_X + clusterIndex.x;
+
+	uint size = texture(samplerClusterMap, uvw).x;
+	ClusterData clusterData = clusterDatas[index];
+
 	vec3 N = normalize(inNormal);
 	vec3 T = normalize(inTangent.xyz);
 	vec3 B = cross(inNormal, inTangent.xyz) * inTangent.w;
@@ -72,32 +81,14 @@ void main()
 
 	vec3 V = normalize(inViewVec);
 
-	// º∆À„clusterIndex
-	vec3 uvw;
-	if(clusterCamera.showCluster == 1 && clusterCamera.isFreeze == 1){
-		vec4 eyePos = clusterCamera.view * vec4(inPos, 1.0);
-		vec4 clipPos = clusterCamera.projection * eyePos;
-		vec3 ndcPos = clipPos.xyz / clipPos.w;
-		uvw.xy = ndcPos.xy * 0.5 + 0.5;
-		uvw.z = (eyePos.z - NEAR) / (FAR - NEAR);
-	}
-	else{
-		uvw.xy = gl_FragCoord.xy / vec2(WIDTH, HEIGHT);
-		uvw.z = (linearDepth(gl_FragCoord.z) - NEAR) / (FAR - NEAR);	
-	}
-
-	uvec3 clusterIndex = uvec3(uvw * uvec3(CLUSTER_X, CLUSTER_Y, CLUSTER_Z));
-	uint index = clusterIndex.z * CLUSTER_Y * CLUSTER_X + clusterIndex.y * CLUSTER_X + clusterIndex.x;
-	Cluster cluster = clusters[index];
-
 	if(clusterCamera.showCluster == 0){
 		vec3 totalDiff = vec3(0.0);
 		vec3 totalSpec = vec3(0.0);
-		for(uint i = 0; i < cluster.size; ++i){
-			if(cluster.lights[i] >= MAX_LIGHT_SIZE)
+		for(uint i = 0; i < size; ++i){
+			if(clusterData.lights[i] >= MAX_LIGHT_SIZE)
 				continue;
 
-			Light light = globalLights.lights[cluster.lights[i]];
+			Light light = globalLights.lights[clusterData.lights[i]];
 
 			float distance = length(light.sphere.xyz - inPos);
 			if(distance < light.sphere.w){
@@ -118,5 +109,5 @@ void main()
 		outFragColor = vec4((ambient + totalDiff) * color.rgb + totalSpec, color.a);	
 	}
 	else
-		outFragColor = vec4(vec3(0.1 * cluster.size, 0.0, 0.0) + 0.1 * color.rgb, 1.0);
+		outFragColor = vec4(vec3(0.1 * size, 0.0, 0.0) + 0.1 * color.rgb, 1.0);
 }

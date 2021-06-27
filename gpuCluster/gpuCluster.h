@@ -162,23 +162,22 @@ public:
 	void prepareUniformBuffers();
 	void updateUniformBuffers();
 	void prepareClusterBuffers();
+	void prepareClusterImages();
 	void prepare();
 	virtual void render();
 	virtual void OnUpdateUIOverlay(vks::UIOverlay* overlay);
 
 // todo: dynamic light & add/delete light
-#define CLUSTER_X 4
-#define CLUSTER_Y 4
-#define CLUSTER_Z 4
+#define CLUSTER_X 8
+#define CLUSTER_Y 8
+#define CLUSTER_Z 8
 #define CLUSTER_SIZE CLUSTER_X * CLUSTER_Y * CLUSTER_Z
 #define MAX_LIST_SIZE 20
 #define MAX_LIGHT_SIZE 1000
 
-	struct Cluster {
-		uint32_t size;
+	struct ClusterData {
 		uint32_t lights[MAX_LIST_SIZE];
 	};
-	Cluster clusters[CLUSTER_SIZE];
 
 	// todo: should add support for spot light
 	struct Light {
@@ -196,9 +195,12 @@ public:
 	};
 	std::array<Frustum, CLUSTER_SIZE> frustums;
 
-	vks::Buffer clusterBuffer;
+	vks::Texture clusterImage; // 3D = clusterIndex, VK_FORMAT_R32_UINT -> r = size
+	vks::Buffer clusterDataBuffer;
 	vks::Buffer lightBuffer;
 	vks::Buffer frustumBuffer;
+	//vks::Texture frustumXYImage; // 3D = clusterXY + left/right/top/bottom, VK_FORMAT_R32G32B32A32_SFLOAT
+	//vks::Texture frustumZImage; // 2D = clusterZ + front/top, VK_FORMAT_R32G32B32A32_SFLOAT
 
 	VkCommandBuffer clusterCmdBuffer;
 	VkFence clusterFence;
@@ -213,9 +215,6 @@ public:
 	VkCommandPool computeCmdPool;
 
 	struct ClusterCamera {
-		glm::mat4 view;
-		glm::mat4 proj;
-		uint32_t isFreeze;
 		uint32_t showCluster;
 	}clusterCamera;
 
@@ -223,11 +222,10 @@ public:
 
 	// imgui update
 	bool showCluster = false;
-	bool isClusterFreeze = false;
 
 private:
 	void updateClusterFrustum();
-	void updateClusterCamera(bool showCluster, bool isFreeze);
+	void updateClusterCamera(bool showCluster);
 	inline glm::vec4 calPlane(glm::vec3 v1, glm::vec3 v2, glm::vec3 v3) {
 		glm::vec3 normal = normalize(cross(v3 - v1, v2 - v1));
 		return glm::vec4(normal, -dot(normal, v1));
