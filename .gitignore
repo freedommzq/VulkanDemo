@@ -9,7 +9,6 @@ VulkanDemo.sln
 gpuCull/imgui.ini
 data/models/
 data/shaders/glsl/
-data/textures/
 data/Roboto-Medium.ttf
 data/font.fnt
 data/README.md
@@ -27,3 +26,4 @@ data/shaders/textureDDS/textureDDS.frag.spv
 data/shaders/textureDDS/textureDDS.vert.spv
 sponza/imgui.ini
 textureDDS/imgui.ini
+*.ktx
