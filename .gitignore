@@ -19,3 +19,11 @@ data/shaders/gpuCluster/cluster.comp.spv
 data/shaders/gpuCluster/scene.frag.spv
 data/shaders/gpuCluster/scene.vert.spv
 gpuCluster/imgui.ini
+data/shaders/sponza/geometry.frag
+data/shaders/sponza/geometry.vert
+data/shaders/sponza/scene.frag.spv
+data/shaders/sponza/scene.vert.spv
+data/shaders/textureDDS/textureDDS.frag.spv
+data/shaders/textureDDS/textureDDS.vert.spv
+sponza/imgui.ini
+textureDDS/imgui.ini

@@ -17,6 +17,7 @@ workspace "VulkanDemo"
 
     startproject "gpuCull"
 
+    -- base begin
     project "base"
 
         location "base"
@@ -70,8 +71,9 @@ workspace "VulkanDemo"
             defines{
                 "NDEBUG"
             }
+    -- base end
 
-
+    -- gpuCull begin
     project "gpuCull"
 
         location "gpuCull"
@@ -117,50 +119,151 @@ workspace "VulkanDemo"
             defines{
                 "NDEBUG"
             }
+    -- gpuCull end
 
-        project "gpuCluster"
+    -- gpuCluster begin
+    project "gpuCluster"
 
-            location "gpuCluster"
-            kind "WindowedApp"
-            language "C++"
-            cppdialect "C++11"
-            staticruntime "on"
-            systemversion "latest"
-    
-            targetdir ("bin/"..cfgDir.."/%{prj.name}")
-            objdir ("intermediate/"..cfgDir.."/%{prj.name}")
-    
-            files{
-                "%{prj.name}/**.h",
-                "%{prj.name}/**.cpp",
-    
-                "data/shaders/%{prj.name}/**.vert",
-                "data/shaders/%{prj.name}/**.frag",
-                "data/shaders/%{prj.name}/**.comp",
+        location "gpuCluster"
+        kind "WindowedApp"
+        language "C++"
+        cppdialect "C++11"
+        staticruntime "on"
+        systemversion "latest"
+
+        targetdir ("bin/"..cfgDir.."/%{prj.name}")
+        objdir ("intermediate/"..cfgDir.."/%{prj.name}")
+
+        files{
+            "%{prj.name}/**.h",
+            "%{prj.name}/**.cpp",
+
+            "data/shaders/%{prj.name}/**.vert",
+            "data/shaders/%{prj.name}/**.frag",
+            "data/shaders/%{prj.name}/**.comp",
+        }
+
+        includedirs{
+            "base",
+            "external",
+            "external/glm",
+            "external/imgui",
+            "external/ktx/include",
+            "external/ktx/other_include",
+            "external/stb",
+            "external/tinygltf",
+            "external/vulkan"
+        }
+
+        links{
+            "base",
+            vulkanLib
+        }
+
+        filter "configurations:Debug"
+            symbols "on"
+
+        filter "configurations:Release"
+            optimize "on"
+            defines{
+                "NDEBUG"
             }
-    
-            includedirs{
-                "base",
-                "external",
-                "external/glm",
-                "external/imgui",
-                "external/ktx/include",
-                "external/ktx/other_include",
-                "external/stb",
-                "external/tinygltf",
-                "external/vulkan"
+    -- gpuCluster end
+
+    -- sponza begin
+    project "sponza"
+
+        location "sponza"
+        kind "WindowedApp"
+        language "C++"
+        cppdialect "C++11"
+        staticruntime "on"
+        systemversion "latest"
+
+        targetdir ("bin/"..cfgDir.."/%{prj.name}")
+        objdir ("intermediate/"..cfgDir.."/%{prj.name}")
+
+        files{
+            "%{prj.name}/**.h",
+            "%{prj.name}/**.cpp",
+
+            "data/shaders/%{prj.name}/**.vert",
+            "data/shaders/%{prj.name}/**.frag",
+            "data/shaders/%{prj.name}/**.comp",
+        }
+
+        includedirs{
+            "base",
+            "external",
+            "external/glm",
+            "external/imgui",
+            "external/ktx/include",
+            "external/ktx/other_include",
+            "external/stb",
+            "external/tinygltf",
+            "external/vulkan"
+        }
+
+        links{
+            "base",
+            vulkanLib
+        }
+
+        filter "configurations:Debug"
+            symbols "on"
+
+        filter "configurations:Release"
+            optimize "on"
+            defines{
+                "NDEBUG"
             }
-    
-            links{
-                "base",
-                vulkanLib
+    -- sponza end
+
+    -- textureDDS begin
+    project "textureDDS"
+
+        location "textureDDS"
+        kind "WindowedApp"
+        language "C++"
+        cppdialect "C++17"
+        staticruntime "on"
+        systemversion "latest"
+
+        targetdir ("bin/"..cfgDir.."/%{prj.name}")
+        objdir ("intermediate/"..cfgDir.."/%{prj.name}")
+
+        files{
+            "%{prj.name}/**.h",
+            "%{prj.name}/**.cpp",
+
+            "data/shaders/%{prj.name}/**.vert",
+            "data/shaders/%{prj.name}/**.frag",
+            "data/shaders/%{prj.name}/**.comp",
+        }
+
+        includedirs{
+            "base",
+            "external",
+            "external/glm",
+            "external/imgui",
+            "external/ktx/include",
+            "external/ktx/other_include",
+            "external/stb",
+            "external/tinygltf",
+            "external/vulkan"
+        }
+
+        links{
+            "base",
+            vulkanLib
+        }
+
+        filter "configurations:Debug"
+            symbols "on"
+
+        filter "configurations:Release"
+            optimize "on"
+            defines{
+                "NDEBUG"
             }
-    
-            filter "configurations:Debug"
-                symbols "on"
-    
-            filter "configurations:Release"
-                optimize "on"
-                defines{
-                    "NDEBUG"
-                }
+    -- textureDDS end
