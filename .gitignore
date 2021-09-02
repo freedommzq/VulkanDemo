@@ -27,3 +27,5 @@ data/shaders/textureDDS/textureDDS.vert.spv
 sponza/imgui.ini
 textureDDS/imgui.ini
 *.ktx
+data/shaders/ArrayOfDescriptor/ArrayOfDescriptor.frag.spv
+data/shaders/ArrayOfDescriptor/ArrayOfDescriptor.vert.spv
