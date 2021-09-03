@@ -22,12 +22,17 @@ public:
 	struct Vertex {
 		float position[3];
 		float uv[2];
-		float color[3];
 	};
-
 	vks::Buffer vertexBuffer;
 	vks::Buffer indexBuffer;
 	uint32_t indexCount;
+
+	struct InstanceData {
+		float modelPos[3];
+		uint32_t texID;
+	};
+	vks::Buffer instanceBuffer;
+	uint32_t instanceCount;
 
 	struct {
 		glm::mat4 projectionMatrix;
@@ -35,19 +40,12 @@ public:
 	} uboVS;
 	vks::Buffer uniformBuffer;
 
-	struct PushConstants{
-		glm::mat4 model;
-		uint32_t texID;
-	}pushConstants;
-
 	std::vector<vks::Texture2D> textures;
 
 	VkPipelineLayout pipelineLayout;
 	VkPipeline pipeline;
 	VkDescriptorSetLayout descriptorSetLayout;
 	VkDescriptorSet descriptorSet;
-
-	VkPhysicalDeviceDescriptorIndexingFeaturesEXT physicalDeviceDescriptorIndexingFeatures{};
 
 	// Fences
 	// Used to check the completion of queue operations (e.g. command buffer execution)
@@ -74,6 +72,7 @@ public:
 		vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 		
 		vertexBuffer.destroy();
+		instanceBuffer.destroy();
 		indexBuffer.destroy();
 
 		uniformBuffer.destroy();
@@ -159,36 +158,14 @@ public:
 			// The pipeline (state object) contains all states of the rendering pipeline, binding it will set all the states specified at pipeline creation time
 			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-			// Bind triangle vertex buffer (contains position and colors)
 			VkDeviceSize offsets[1] = { 0 };
 			vkCmdBindVertexBuffers(drawCmdBuffers[i], 0, 1, &vertexBuffer.buffer, offsets);
+			vkCmdBindVertexBuffers(drawCmdBuffers[i], 1, 1, &instanceBuffer.buffer, offsets);
 
 			// Bind triangle index buffer
 			vkCmdBindIndexBuffer(drawCmdBuffers[i], indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-			pushConstants.model = glm::translate(glm::mat4(1.0f), glm::vec3(1.5f, 0.0f, 0.0f));
-			pushConstants.texID = 0;
-			vkCmdPushConstants(
-				drawCmdBuffers[i],
-				pipelineLayout,
-				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-				0,
-				sizeof(pushConstants),
-				&pushConstants
-			);
-			vkCmdDrawIndexed(drawCmdBuffers[i], indexCount, 1, 0, 0, 1);
-
-			pushConstants.model = glm::translate(glm::mat4(1.0f), glm::vec3(-1.5f, 0.0f, 0.0f));
-			pushConstants.texID = 1;
-			vkCmdPushConstants(
-				drawCmdBuffers[i],
-				pipelineLayout,
-				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-				0,
-				sizeof(pushConstants),
-				&pushConstants
-			);
-			vkCmdDrawIndexed(drawCmdBuffers[i], indexCount, 1, 0, 0, 1);
+			vkCmdDrawIndexed(drawCmdBuffers[i], indexCount, instanceCount, 0, 0, 0);
 
 			vkCmdEndRenderPass(drawCmdBuffers[i]);
 
@@ -227,17 +204,18 @@ public:
 		//	what should be done a real-world application, where you should allocate large chunks of memory at once instead.
 
 		// Setup vertices
-		std::vector<Vertex> vertices =
-		{
-			{ {  1.0f,  1.0f, 0.0f }, { 1.0f, 1.0f },{ 0.0f, 0.0f, 1.0f } },
-			{ { -1.0f,  1.0f, 0.0f }, { 0.0f, 1.0f },{ 0.0f, 0.0f, 1.0f } },
-			{ { -1.0f, -1.0f, 0.0f }, { 0.0f, 0.0f },{ 0.0f, 0.0f, 1.0f } },
-			{ {  1.0f, -1.0f, 0.0f }, { 1.0f, 0.0f },{ 0.0f, 0.0f, 1.0f } }
+		std::vector<Vertex> vertices = {
+			{ {  1.0f,  1.0f, 0.0f }, { 1.0f, 1.0f } },
+			{ { -1.0f,  1.0f, 0.0f }, { 0.0f, 1.0f } },
+			{ {  1.0f, -1.0f, 0.0f }, { 1.0f, 0.0f } },
+			{ { -1.0f, -1.0f, 0.0f }, { 0.0f, 0.0f } },
 		};
 		uint32_t vertexBufferSize = static_cast<uint32_t>(vertices.size()) * sizeof(Vertex);
 
 		// Setup indices
-		std::vector<uint32_t> indices = { 0,1,2, 2,3,0 };
+		std::vector<uint32_t> indices = { 
+			0,1,2, 1,3,2
+		};
 		indexCount = static_cast<uint32_t>(indices.size());
 		uint32_t indexBufferSize = indexCount * sizeof(uint32_t);
 
@@ -291,6 +269,44 @@ public:
 		stagingBuffers.index.destroy();
 	}
 
+	void prepareInstanceData() {
+		// [poi] use instance buffer for specify model position and texture ID
+		std::vector<InstanceData> instances = { 
+			{ { -1.5f, 0.0f, 0.0f }, 0u },
+			{ {  1.5f, 0.0f, 0.0f }, 1u }
+		};
+		instanceCount = static_cast<uint32_t>(instances.size());
+		uint32_t instanceBufferSize = instanceCount * sizeof(InstanceData);
+
+		vks::Buffer staging;
+
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&staging,
+			instanceBufferSize,
+			instances.data()
+		));
+
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			&instanceBuffer,
+			instanceBufferSize
+		));
+
+		// Copy from staging buffers
+		VkCommandBuffer copyCmd = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+		VkBufferCopy copyRegion = {};
+		copyRegion.size = instanceBufferSize;
+		vkCmdCopyBuffer(copyCmd, staging.buffer, instanceBuffer.buffer, 1, &copyRegion);
+
+		vulkanDevice->flushCommandBuffer(copyCmd, queue);
+
+		staging.destroy();
+	}
+
 	void setupDescriptorPool()
 	{
 		std::vector<VkDescriptorPoolSize> typeCounts = {
@@ -327,14 +343,6 @@ public:
 		// Create the pipeline layout that is used to generate the rendering pipelines that are based on this descriptor set layout
 		// In a more complex scenario you would have different pipeline layouts for different descriptor set layouts that could be reused
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo = vks::initializers::pipelineLayoutCreateInfo(&descriptorSetLayout, 1);
-		// We will use push constants to push the local matrices of a primitive to the vertex shader
-		std::vector<VkPushConstantRange> pushConstantRanges = {
-			vks::initializers::pushConstantRange(
-				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(pushConstants), 0)
-		};
-		// Push constant ranges are part of the pipeline layout
-		pipelineLayoutInfo.pushConstantRangeCount = pushConstantRanges.size();
-		pipelineLayoutInfo.pPushConstantRanges = pushConstantRanges.data();
 
 		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout));
 	}
@@ -371,13 +379,16 @@ public:
 		VkPipelineVertexInputStateCreateInfo inputState = vks::initializers::pipelineVertexInputStateCreateInfo();
 		// Binding description
 		std::vector<VkVertexInputBindingDescription> bindingDescriptions = {
-			vks::initializers::vertexInputBindingDescription(0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX)
+			vks::initializers::vertexInputBindingDescription(0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX),
+			vks::initializers::vertexInputBindingDescription(1, sizeof(InstanceData), VK_VERTEX_INPUT_RATE_INSTANCE)
 		};
 		// Attribute descriptions
 		std::vector<VkVertexInputAttributeDescription> attributeDescriptions = {
 			vks::initializers::vertexInputAttributeDescription(0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)),
 			vks::initializers::vertexInputAttributeDescription(0, 1, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)),
-			vks::initializers::vertexInputAttributeDescription(0, 2, VK_FORMAT_R32G32B32_SFLOAT,offsetof(Vertex, color))
+
+			vks::initializers::vertexInputAttributeDescription(1, 2, VK_FORMAT_R32G32B32_SFLOAT, offsetof(InstanceData, modelPos)),
+			vks::initializers::vertexInputAttributeDescription(1, 3, VK_FORMAT_R32_UINT, offsetof(InstanceData, texID)),
 		};
 
 		inputState.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescriptions.size());
@@ -455,6 +466,7 @@ public:
 		prepareSynchronizationPrimitives();
 		loadTextures();
 		prepareQuad();
+		prepareInstanceData();
 		prepareUniformBuffers();
 		setupLayouts();
 		preparePipelines();
