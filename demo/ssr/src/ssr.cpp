@@ -16,6 +16,8 @@ class VulkanExample : public VulkanExampleBase
 public:
 	int32_t debugDisplayTarget = 0;
 
+	bool descriptorNeedRewrite = false;
+
 	struct {
 		struct {
 			vks::Texture2D colorMap;
@@ -74,7 +76,7 @@ public:
 
 	// Framebuffer for offscreen rendering
 	struct FrameBufferAttachment {
-		VkImage image;
+		VkImage image = VK_NULL_HANDLE;
 		VkDeviceMemory mem;
 		VkImageView view;
 		VkFormat format;
@@ -164,6 +166,13 @@ public:
 
 		assert(aspectMask > 0);
 
+		if (attachment->image != VK_NULL_HANDLE) {
+			vkDestroyImageView(device, attachment->view, nullptr);
+			vkDestroyImage(device, attachment->image, nullptr);
+			vkFreeMemory(device, attachment->mem, nullptr);
+			descriptorNeedRewrite = true;
+		}
+
 		VkImageCreateInfo image = vks::initializers::imageCreateInfo();
 		image.imageType = VK_IMAGE_TYPE_2D;
 		image.format = format;
@@ -237,9 +246,49 @@ public:
 		VK_CHECK_RESULT(vkCreateSampler(device, &sampler, nullptr, &colorSampler));
 	}
 
-	virtual void setupRenderPass() override {
-		setupFBAs();
+	virtual void setupDepthStencil() override {
+		VkImageCreateInfo imageCI{};
+		imageCI.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		imageCI.imageType = VK_IMAGE_TYPE_2D;
+		imageCI.format = depthFormat;
+		imageCI.extent = { width, height, 1 };
+		imageCI.mipLevels = 1;
+		imageCI.arrayLayers = 1;
+		imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
+		imageCI.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 
+		VK_CHECK_RESULT(vkCreateImage(device, &imageCI, nullptr, &depthStencil.image));
+		VkMemoryRequirements memReqs{};
+		vkGetImageMemoryRequirements(device, depthStencil.image, &memReqs);
+
+		VkMemoryAllocateInfo memAllloc{};
+		memAllloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		memAllloc.allocationSize = memReqs.size;
+		memAllloc.memoryTypeIndex = vulkanDevice->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VK_CHECK_RESULT(vkAllocateMemory(device, &memAllloc, nullptr, &depthStencil.mem));
+		VK_CHECK_RESULT(vkBindImageMemory(device, depthStencil.image, depthStencil.mem, 0));
+
+		VkImageViewCreateInfo imageViewCI{};
+		imageViewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		imageViewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		imageViewCI.image = depthStencil.image;
+		imageViewCI.format = depthFormat;
+		imageViewCI.subresourceRange.baseMipLevel = 0;
+		imageViewCI.subresourceRange.levelCount = 1;
+		imageViewCI.subresourceRange.baseArrayLayer = 0;
+		imageViewCI.subresourceRange.layerCount = 1;
+		imageViewCI.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+		// Stencil aspect should only be set on depth + stencil formats (VK_FORMAT_D16_UNORM_S8_UINT..VK_FORMAT_D32_SFLOAT_S8_UINT
+		if (depthFormat >= VK_FORMAT_D16_UNORM_S8_UINT) {
+			imageViewCI.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+		}
+		VK_CHECK_RESULT(vkCreateImageView(device, &imageViewCI, nullptr, &depthStencil.view));
+
+		setupFBAs();
+	}
+
+	virtual void setupRenderPass() override {
 		std::array<VkAttachmentDescription, 5> attachments = {};
 		// swap chain image
 		attachments[0].format = swapChain.colorFormat;
@@ -377,6 +426,26 @@ public:
 	}
 
 	virtual void setupFrameBuffer() override {
+		if (descriptorNeedRewrite) {
+			// Image descriptors for the offscreen color attachments
+			VkDescriptorImageInfo texDescriptorPosition = { VK_NULL_HANDLE, positionFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+			VkDescriptorImageInfo texDescriptorNormal = { VK_NULL_HANDLE, normalFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+			VkDescriptorImageInfo texDescriptorAlbedo = { VK_NULL_HANDLE, colorFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
+			std::vector<VkWriteDescriptorSet> writeDescriptorSets;
+			writeDescriptorSets = {
+				// Binding 1 : Position texture target
+				vks::initializers::writeDescriptorSet(dsLighting, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 3, &texDescriptorPosition),
+				// Binding 2 : Normals texture target
+				vks::initializers::writeDescriptorSet(dsLighting, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 4, &texDescriptorNormal),
+				// Binding 3 : Albedo texture target
+				vks::initializers::writeDescriptorSet(dsLighting, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 5, &texDescriptorAlbedo),
+			};
+			vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
+			
+			descriptorNeedRewrite = false;
+		}
+
 		std::array<VkImageView, 5> attachments;
 		attachments[1] = positionFBA.view;
 		attachments[2] = normalFBA.view;
