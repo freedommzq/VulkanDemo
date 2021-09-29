@@ -1,12 +1,16 @@
 #version 450
 
-layout (input_attachment_index = 0, binding = 3) uniform subpassInput samplerposition;
-layout (input_attachment_index = 1, binding = 4) uniform subpassInput samplerNormal;
-layout (input_attachment_index = 2, binding = 5) uniform subpassInput samplerAlbedo;
+layout(early_fragment_tests) in;
 
-layout (location = 0) in vec2 inUV;
+layout (location = 0) in vec3 inWorldPos;
+layout (location = 1) in vec2 inUV;
+layout (location = 2) in vec3 inNormal;
+layout (location = 3) in vec3 inTangent;
 
-layout (location = 0) out vec4 outFragcolor;
+layout (location = 0) out vec4 outPosition;
+layout (location = 1) out vec4 outNormal;
+layout (location = 2) out vec4 outDirectLight;
+
 
 struct Light {
 	vec4 position;
@@ -14,41 +18,32 @@ struct Light {
 	float radius;
 };
 
-layout (binding = 6) uniform UBO 
+layout (binding = 3) uniform UBO 
 {
 	Light lights[6];
-	vec4 viewPos;
-	int displayDebugTarget;
+	mat4 view;
 } ubo;
+
+layout (binding = 1) uniform sampler2D samplerColorMap;
+layout (binding = 2) uniform sampler2D samplerNormalMap;
+
 
 void main() 
 {
 	// Get G-Buffer values
-	vec3 fragPos = subpassLoad(samplerposition).rgb;
-	vec3 normal = subpassLoad(samplerNormal).rgb;
-	vec4 albedo = subpassLoad(samplerAlbedo);
-	
-	// Debug display
-	if (ubo.displayDebugTarget > 0) {
-		switch (ubo.displayDebugTarget) {
-			case 1: 
-				outFragcolor.rgb = fragPos;
-				break;
-			case 2: 
-				outFragcolor.rgb = normal;
-				break;
-			case 3: 
-				outFragcolor.rgb = albedo.rgb;
-				break;
-			case 4: 
-				outFragcolor.rgb = albedo.aaa;
-				break;
-		}		
-		outFragcolor.a = 1.0;
-		return;
-	}
+	vec3 fragPos = inWorldPos;
 
-	// Render-target composition
+	// Calculate normal in tangent space
+	vec3 N = normalize(inNormal);
+	vec3 T = normalize(inTangent);
+	vec3 B = cross(N, T);
+	mat3 TBN = mat3(T, B, N);
+	//vec3 normal = TBN * normalize(texture(samplerNormalMap, inUV).xyz * 2.0 - vec3(1.0));
+	vec3 normal = N;
+
+	vec4 albedo = texture(samplerColorMap, inUV);
+
+
 
 	#define lightCount 6
 	#define ambient 0.0
@@ -56,15 +51,17 @@ void main()
 	// Ambient part
 	vec3 fragcolor  = albedo.rgb * ambient;
 	
+	// Direct light calculate in view space
 	for(int i = 0; i < lightCount; ++i)
 	{
 		// Vector to light
-		vec3 L = ubo.lights[i].position.xyz - fragPos;
+		vec3 lightPos = ubo.lights[i].position.xyz; // World space light position
+		vec3 L = (ubo.view * vec4(lightPos, 1.0)).xyz - fragPos;
 		// Distance from light to fragment position
 		float dist = length(L);
 
 		// Viewer to fragment
-		vec3 V = ubo.viewPos.xyz - fragPos;
+		vec3 V = -fragPos;
 		V = normalize(V);
 		
 		//if(dist < ubo.lights[i].radius)
@@ -89,6 +86,9 @@ void main()
 			fragcolor += diff + spec;	
 		}	
 	}    	
-   
-  outFragcolor = vec4(fragcolor, 1.0);	
+	
+	outPosition = vec4(fragPos, 1.0);
+	outNormal = vec4(normal, 1.0);
+	outDirectLight = vec4(fragcolor, 1.0);
+	//outDirectLight = albedo;
 }

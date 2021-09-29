@@ -14,8 +14,6 @@
 class VulkanExample : public VulkanExampleBase
 {
 public:
-	int32_t debugDisplayTarget = 0;
-
 	bool descriptorNeedRewrite = false;
 
 	struct {
@@ -39,7 +37,7 @@ public:
 		glm::mat4 model;
 		glm::mat4 view;
 		glm::vec4 instancePos[3];
-	} uboOffscreenVS;
+	} uboVS;
 
 	struct Light {
 		glm::vec4 position;
@@ -49,13 +47,22 @@ public:
 
 	struct {
 		Light lights[6];
-		glm::vec4 viewPos;
-		int debugDisplayTarget = 0;
-	} uboComposition;
+		glm::mat4 view;
+	} uboLighting;
 
 	struct {
-		vks::Buffer offscreen;
-		vks::Buffer composition;
+		glm::mat4 projection;
+
+		// SSR settings
+		float maxDistance = 2.0;
+		float resolution = 0.1;
+		float thickness = 0.5;
+	}uboSsr;
+
+	struct {
+		vks::Buffer vs; // used in vertex shader both in prez pass and direct lighting pass
+		vks::Buffer lighting; // used in fragment shader in lighting pass
+		vks::Buffer ssr;
 	} uniformBuffers;
 
 	VkDescriptorSetLayout descriptorSetLayout;
@@ -65,74 +72,77 @@ public:
 	struct {
 		VkDescriptorSet model;
 		VkDescriptorSet floor;
-	} dsGeometry;
-	VkDescriptorSet dsLighting;
+	} dsLighting;
+	VkDescriptorSet dsSsr;
+	VkDescriptorSet dsComposition;
 
 	struct {
 		VkPipeline prez;
-		VkPipeline geometry;
 		VkPipeline lighting;
+		VkPipeline ssr;
+		VkPipeline composition;
 	} pipelines;
 
 	// Framebuffer for offscreen rendering
 	struct FrameBufferAttachment {
+		void destroy(VkDevice device) {
+			if (image != VK_NULL_HANDLE) {
+				vkDestroyImageView(device, view, nullptr);
+				vkDestroyImage(device, image, nullptr);
+				vkFreeMemory(device, mem, nullptr);
+			}
+		}
+
 		VkImage image = VK_NULL_HANDLE;
 		VkDeviceMemory mem;
 		VkImageView view;
 		VkFormat format;
 	};
-	FrameBufferAttachment positionFBA, normalFBA, colorFBA; // gBuffers
+	FrameBufferAttachment positionFBA, normalFBA; // gBuffers
+	FrameBufferAttachment directColorFBA;
+	FrameBufferAttachment reflectUvFBA;
 
-	// One sampler for the frame buffer color attachments
 	VkSampler colorSampler;
 
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	{
 		title = "Deferred shading";
+		//camera.flipY = true;
 		camera.type = Camera::CameraType::firstperson;
 		camera.movementSpeed = 5.0f;
 #ifndef __ANDROID__
 		camera.rotationSpeed = 0.25f;
 #endif
-		camera.position = { 2.15f, 0.3f, -8.75f };
-		camera.setRotation(glm::vec3(-0.75f, 12.5f, 0.0f));
+		camera.position = { 0.0f, 0.3f, -8.75f };
+		//camera.setRotation(glm::vec3(-0.75f, 12.5f, 0.0f));
+		camera.setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
 		camera.setPerspective(60.0f, (float)width / (float)height, 0.1f, 256.0f);
 		settings.overlay = true;
-		UIOverlay.subpass = 2;
+		UIOverlay.subpass = 3;
 	}
 
 	~VulkanExample()
 	{
-		// Clean up used Vulkan resources
-		// Note : Inherited destructor cleans up resources stored in base class
-
 		vkDestroySampler(device, colorSampler, nullptr);
 
-		// Frame buffer
-
-		// Color attachments
-		vkDestroyImageView(device, positionFBA.view, nullptr);
-		vkDestroyImage(device, positionFBA.image, nullptr);
-		vkFreeMemory(device, positionFBA.mem, nullptr);
-
-		vkDestroyImageView(device, normalFBA.view, nullptr);
-		vkDestroyImage(device, normalFBA.image, nullptr);
-		vkFreeMemory(device, normalFBA.mem, nullptr);
-
-		vkDestroyImageView(device, colorFBA.view, nullptr);
-		vkDestroyImage(device, colorFBA.image, nullptr);
-		vkFreeMemory(device, colorFBA.mem, nullptr);
+		// Framebuffer attachments
+		positionFBA.destroy(device);
+		normalFBA.destroy(device);
+		directColorFBA.destroy(device);
+		reflectUvFBA.destroy(device);
 
 		vkDestroyPipeline(device, pipelines.prez, nullptr);
-		vkDestroyPipeline(device, pipelines.geometry, nullptr);
 		vkDestroyPipeline(device, pipelines.lighting, nullptr);
+		vkDestroyPipeline(device, pipelines.ssr, nullptr);
+		vkDestroyPipeline(device, pipelines.composition, nullptr);
 
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 		vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 
 		// Uniform buffers
-		uniformBuffers.offscreen.destroy();
-		uniformBuffers.composition.destroy();
+		uniformBuffers.vs.destroy();
+		uniformBuffers.lighting.destroy();
+		uniformBuffers.ssr.destroy();
 
 		textures.model.colorMap.destroy();
 		textures.model.normalMap.destroy();
@@ -211,23 +221,30 @@ public:
 	void setupFBAs() {
 		createAttachment(
 			VK_FORMAT_R16G16B16A16_SFLOAT,
-			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 			width, height,
 			&positionFBA
 		);
 
 		createAttachment(
 			VK_FORMAT_R16G16B16A16_SFLOAT,
-			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 			width, height,
 			&normalFBA
 		);
 
 		createAttachment(
 			VK_FORMAT_R8G8B8A8_UNORM,
-			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 			width, height,
-			&colorFBA
+			&directColorFBA
+		);
+
+		createAttachment(
+			VK_FORMAT_R16G16B16A16_UNORM,
+			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+			width, height,
+			&reflectUvFBA
 		);
 
 		// Create sampler to sample from the color attachments
@@ -289,7 +306,7 @@ public:
 	}
 
 	virtual void setupRenderPass() override {
-		std::array<VkAttachmentDescription, 5> attachments = {};
+		std::array<VkAttachmentDescription, 6> attachments = {};
 		// swap chain image
 		attachments[0].format = swapChain.colorFormat;
 		attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
@@ -317,8 +334,8 @@ public:
 		attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 		attachments[2].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		// color target
-		attachments[3].format = colorFBA.format;
+		// direct lighting result
+		attachments[3].format = directColorFBA.format;
 		attachments[3].samples = VK_SAMPLE_COUNT_1_BIT;
 		attachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 		attachments[3].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -326,36 +343,52 @@ public:
 		attachments[3].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		attachments[3].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 		attachments[3].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		// depth
-		attachments[4].format = depthFormat;
+		// reflect UV
+		attachments[4].format = reflectUvFBA.format;
 		attachments[4].samples = VK_SAMPLE_COUNT_1_BIT;
-		attachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		attachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 		attachments[4].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		attachments[4].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 		attachments[4].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		attachments[4].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		attachments[4].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+		attachments[4].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		// depth attachment
+		attachments[5].format = depthFormat;
+		attachments[5].samples = VK_SAMPLE_COUNT_1_BIT;
+		attachments[5].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		attachments[5].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attachments[5].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		attachments[5].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attachments[5].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		attachments[5].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
 		// pre-z subpass
-		VkAttachmentReference prezDepthRef = { 4, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+		VkAttachmentReference prezDepthRef = { 5, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
 
-		// geometry subpass
-		std::array<VkAttachmentReference, 3> gColorRefs = {{
+		// direct lighting subpass
+		std::array<VkAttachmentReference, 3> lightColorRefs = { {
 			{ 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
 			{ 2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
 			{ 3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL }
-		}};
-		VkAttachmentReference gDepthRef = { 4, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+		} };
+		VkAttachmentReference lightDepthRef = { 5, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
 
-		// lighting subpass
-		VkAttachmentReference lightColorRef = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-		std::array<VkAttachmentReference, 3> lightInputRefs = { {
+		// ssr subpass
+		VkAttachmentReference ssrColorRef = { 4, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+		std::array<VkAttachmentReference, 2> ssrInputRefs = { {
 			{ 1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-			{ 2, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-			{ 3, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }
+			{ 2, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }
+		} };
+		uint32_t ssrPreserveRef = 3;
+
+		// composition subpass
+		VkAttachmentReference compColorRef = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+		std::array<VkAttachmentReference, 2> compInputRefs = { {
+			{ 3, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ 4, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }
 		} };
 
-		std::array<VkSubpassDescription, 3> subpassDescriptions = {};
+		std::array<VkSubpassDescription, 4> subpassDescriptions = {};
 		subpassDescriptions[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 		subpassDescriptions[0].colorAttachmentCount = 0;
 		subpassDescriptions[0].pColorAttachments = nullptr;
@@ -367,9 +400,9 @@ public:
 		subpassDescriptions[0].pResolveAttachments = nullptr;
 
 		subpassDescriptions[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpassDescriptions[1].colorAttachmentCount = static_cast<uint32_t>(gColorRefs.size());
-		subpassDescriptions[1].pColorAttachments = gColorRefs.data();
-		subpassDescriptions[1].pDepthStencilAttachment = &gDepthRef;
+		subpassDescriptions[1].colorAttachmentCount = static_cast<uint32_t>(lightColorRefs.size());
+		subpassDescriptions[1].pColorAttachments = lightColorRefs.data();
+		subpassDescriptions[1].pDepthStencilAttachment = &lightDepthRef;
 		subpassDescriptions[1].inputAttachmentCount = 0;
 		subpassDescriptions[1].pInputAttachments = nullptr;
 		subpassDescriptions[1].preserveAttachmentCount = 0;
@@ -378,19 +411,29 @@ public:
 
 		subpassDescriptions[2].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 		subpassDescriptions[2].colorAttachmentCount = 1;
-		subpassDescriptions[2].pColorAttachments = &lightColorRef;
+		subpassDescriptions[2].pColorAttachments = &ssrColorRef;
 		subpassDescriptions[2].pDepthStencilAttachment = nullptr;
-		subpassDescriptions[2].inputAttachmentCount = static_cast<uint32_t>(lightInputRefs.size());
-		subpassDescriptions[2].pInputAttachments = lightInputRefs.data();
-		subpassDescriptions[2].preserveAttachmentCount = 0;
-		subpassDescriptions[2].pPreserveAttachments = nullptr;
+		subpassDescriptions[2].inputAttachmentCount = static_cast<uint32_t>(ssrInputRefs.size());
+		subpassDescriptions[2].pInputAttachments = ssrInputRefs.data();
+		subpassDescriptions[2].preserveAttachmentCount = 1;
+		subpassDescriptions[2].pPreserveAttachments = &ssrPreserveRef;
 		subpassDescriptions[2].pResolveAttachments = nullptr;
 
+		subpassDescriptions[3].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpassDescriptions[3].colorAttachmentCount = 1;
+		subpassDescriptions[3].pColorAttachments = &compColorRef;
+		subpassDescriptions[3].pDepthStencilAttachment = nullptr;
+		subpassDescriptions[3].inputAttachmentCount = static_cast<uint32_t>(compInputRefs.size());
+		subpassDescriptions[3].pInputAttachments = compInputRefs.data();
+		subpassDescriptions[3].preserveAttachmentCount = 0;
+		subpassDescriptions[3].pPreserveAttachments = nullptr;
+		subpassDescriptions[3].pResolveAttachments = nullptr;
+
 		// Subpass dependencies for layout transitions
-		std::array<VkSubpassDependency, 3> dependencies;
+		std::array<VkSubpassDependency, 4> dependencies;
 
 		dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-		dependencies[0].dstSubpass = 2;
+		dependencies[0].dstSubpass = 3;
 		dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 		dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 		dependencies[0].srcAccessMask = 0;
@@ -413,6 +456,14 @@ public:
 		dependencies[2].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 		dependencies[2].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
+		dependencies[3].srcSubpass = 2;
+		dependencies[3].dstSubpass = 3;
+		dependencies[3].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[3].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		dependencies[3].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		dependencies[3].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		dependencies[3].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
 		VkRenderPassCreateInfo renderPassInfo = {};
 		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 		renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
@@ -427,34 +478,48 @@ public:
 
 	virtual void setupFrameBuffer() override {
 		if (descriptorNeedRewrite) {
-			// Image descriptors for the offscreen color attachments
-			VkDescriptorImageInfo texDescriptorPosition = { VK_NULL_HANDLE, positionFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-			VkDescriptorImageInfo texDescriptorNormal = { VK_NULL_HANDLE, normalFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-			VkDescriptorImageInfo texDescriptorAlbedo = { VK_NULL_HANDLE, colorFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
-			std::vector<VkWriteDescriptorSet> writeDescriptorSets;
+			std::vector<VkWriteDescriptorSet> writeDescriptorSets;		
+			/*
+				SSR subpass
+			*/
+			VkDescriptorImageInfo descriptorPosition = { colorSampler, positionFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+			VkDescriptorImageInfo descriptorNormal = { colorSampler, normalFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
 			writeDescriptorSets = {
-				// Binding 1 : Position texture target
-				vks::initializers::writeDescriptorSet(dsLighting, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 3, &texDescriptorPosition),
-				// Binding 2 : Normals texture target
-				vks::initializers::writeDescriptorSet(dsLighting, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 4, &texDescriptorNormal),
-				// Binding 3 : Albedo texture target
-				vks::initializers::writeDescriptorSet(dsLighting, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 5, &texDescriptorAlbedo),
+				// Binding 1: Position target
+				vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &descriptorPosition),
+				// Binding 2: Normal target
+				vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &descriptorNormal),
 			};
 			vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
-			
+
+			/*
+				Composition subpass
+			*/
+			VkDescriptorImageInfo descriptorDirect = { colorSampler, directColorFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+			VkDescriptorImageInfo descriptorReflect = { colorSampler, reflectUvFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
+			writeDescriptorSets = {
+				// Binding 1: Direct light result target
+				vks::initializers::writeDescriptorSet(dsComposition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &descriptorDirect),
+				// Binding 2: Reflect UV target
+				vks::initializers::writeDescriptorSet(dsComposition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &descriptorReflect),
+			};
+			vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
+
 			descriptorNeedRewrite = false;
 		}
 
-		std::array<VkImageView, 5> attachments;
+		std::array<VkImageView, 6> attachments;
 		attachments[1] = positionFBA.view;
 		attachments[2] = normalFBA.view;
-		attachments[3] = colorFBA.view;
-		attachments[4] = depthStencil.view;
+		attachments[3] = directColorFBA.view;
+		attachments[4] = reflectUvFBA.view;
+		attachments[5] = depthStencil.view;
 
 		VkFramebufferCreateInfo frameBufferCreateInfo = {};
 		frameBufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-		frameBufferCreateInfo.pNext = NULL;
 		frameBufferCreateInfo.renderPass = renderPass;
 		frameBufferCreateInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
 		frameBufferCreateInfo.pAttachments = attachments.data();
@@ -489,88 +554,100 @@ public:
 		VK_CHECK_RESULT(vulkanDevice->createBuffer(
 			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&uniformBuffers.offscreen,
-			sizeof(uboOffscreenVS)));
+			&uniformBuffers.vs,
+			sizeof(uboVS)));
 
 		// Deferred fragment shader
 		VK_CHECK_RESULT(vulkanDevice->createBuffer(
 			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&uniformBuffers.composition,
-			sizeof(uboComposition)));
+			&uniformBuffers.lighting,
+			sizeof(uboLighting)));
+
+		// SSR fragment shader
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&uniformBuffers.ssr,
+			sizeof(uboSsr)));
 
 		// Map persistent
-		VK_CHECK_RESULT(uniformBuffers.offscreen.map());
-		VK_CHECK_RESULT(uniformBuffers.composition.map());
+		VK_CHECK_RESULT(uniformBuffers.vs.map());
+		VK_CHECK_RESULT(uniformBuffers.lighting.map());
+		VK_CHECK_RESULT(uniformBuffers.ssr.map());
 
 		// Setup instanced model positions
-		uboOffscreenVS.instancePos[0] = glm::vec4(0.0f);
-		uboOffscreenVS.instancePos[1] = glm::vec4(-4.0f, 0.0, -4.0f, 0.0f);
-		uboOffscreenVS.instancePos[2] = glm::vec4(4.0f, 0.0, -4.0f, 0.0f);
+		uboVS.instancePos[0] = glm::vec4(0.0f);
+		uboVS.instancePos[1] = glm::vec4(-4.0f, 0.0, -4.0f, 0.0f);
+		uboVS.instancePos[2] = glm::vec4(4.0f, 0.0, -4.0f, 0.0f);
 
 		// Update
-		updateUniformBufferOffscreen();
-		updateUniformBufferComposition();
+		updateUniformBufferVS();
+		updateUniformBufferLighting();
+		updateUniformBufferSsr();
 	}
 
 	// Update matrices used for the offscreen rendering of the scene
-	void updateUniformBufferOffscreen()
+	void updateUniformBufferVS()
 	{
-		uboOffscreenVS.projection = camera.matrices.perspective;
-		uboOffscreenVS.view = camera.matrices.view;
-		uboOffscreenVS.model = glm::mat4(1.0f);
-		memcpy(uniformBuffers.offscreen.mapped, &uboOffscreenVS, sizeof(uboOffscreenVS));
+		uboVS.projection = camera.matrices.perspective;
+		uboVS.view = camera.matrices.view;
+		uboVS.model = glm::mat4(1.0f);
+		memcpy(uniformBuffers.vs.mapped, &uboVS, sizeof(uboVS));
 	}
 
 	// Update lights and parameters passed to the composition shaders
-	void updateUniformBufferComposition()
+	void updateUniformBufferLighting()
 	{
 		// White
-		uboComposition.lights[0].position = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
-		uboComposition.lights[0].color = glm::vec3(1.5f);
-		uboComposition.lights[0].radius = 15.0f * 0.25f;
+		uboLighting.lights[0].position = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+		uboLighting.lights[0].color = glm::vec3(1.5f);
+		uboLighting.lights[0].radius = 15.0f * 0.25f;
 		// Red
-		uboComposition.lights[1].position = glm::vec4(-2.0f, 0.0f, 0.0f, 0.0f);
-		uboComposition.lights[1].color = glm::vec3(1.0f, 0.0f, 0.0f);
-		uboComposition.lights[1].radius = 15.0f;
+		uboLighting.lights[1].position = glm::vec4(-2.0f, 0.0f, 0.0f, 0.0f);
+		uboLighting.lights[1].color = glm::vec3(1.0f, 0.0f, 0.0f);
+		uboLighting.lights[1].radius = 15.0f;
 		// Blue
-		uboComposition.lights[2].position = glm::vec4(2.0f, -1.0f, 0.0f, 0.0f);
-		uboComposition.lights[2].color = glm::vec3(0.0f, 0.0f, 2.5f);
-		uboComposition.lights[2].radius = 5.0f;
+		uboLighting.lights[2].position = glm::vec4(2.0f, -1.0f, 0.0f, 0.0f);
+		uboLighting.lights[2].color = glm::vec3(0.0f, 0.0f, 2.5f);
+		uboLighting.lights[2].radius = 5.0f;
 		// Yellow
-		uboComposition.lights[3].position = glm::vec4(0.0f, -0.9f, 0.5f, 0.0f);
-		uboComposition.lights[3].color = glm::vec3(1.0f, 1.0f, 0.0f);
-		uboComposition.lights[3].radius = 2.0f;
+		uboLighting.lights[3].position = glm::vec4(0.0f, -0.9f, 0.5f, 0.0f);
+		uboLighting.lights[3].color = glm::vec3(1.0f, 1.0f, 0.0f);
+		uboLighting.lights[3].radius = 2.0f;
 		// Green
-		uboComposition.lights[4].position = glm::vec4(0.0f, -0.5f, 0.0f, 0.0f);
-		uboComposition.lights[4].color = glm::vec3(0.0f, 1.0f, 0.2f);
-		uboComposition.lights[4].radius = 5.0f;
+		uboLighting.lights[4].position = glm::vec4(0.0f, -0.5f, 0.0f, 0.0f);
+		uboLighting.lights[4].color = glm::vec3(0.0f, 1.0f, 0.2f);
+		uboLighting.lights[4].radius = 5.0f;
 		// Yellow
-		uboComposition.lights[5].position = glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
-		uboComposition.lights[5].color = glm::vec3(1.0f, 0.7f, 0.3f);
-		uboComposition.lights[5].radius = 25.0f;
+		uboLighting.lights[5].position = glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
+		uboLighting.lights[5].color = glm::vec3(1.0f, 0.7f, 0.3f);
+		uboLighting.lights[5].radius = 25.0f;
 
-		uboComposition.lights[0].position.x = sin(glm::radians(360.0f * timer)) * 5.0f;
-		uboComposition.lights[0].position.z = cos(glm::radians(360.0f * timer)) * 5.0f;
+		uboLighting.lights[0].position.x = sin(glm::radians(360.0f * timer)) * 5.0f;
+		uboLighting.lights[0].position.z = cos(glm::radians(360.0f * timer)) * 5.0f;
 
-		uboComposition.lights[1].position.x = -4.0f + sin(glm::radians(360.0f * timer) + 45.0f) * 2.0f;
-		uboComposition.lights[1].position.z = 0.0f + cos(glm::radians(360.0f * timer) + 45.0f) * 2.0f;
+		uboLighting.lights[1].position.x = -4.0f + sin(glm::radians(360.0f * timer) + 45.0f) * 2.0f;
+		uboLighting.lights[1].position.z = 0.0f + cos(glm::radians(360.0f * timer) + 45.0f) * 2.0f;
 
-		uboComposition.lights[2].position.x = 4.0f + sin(glm::radians(360.0f * timer)) * 2.0f;
-		uboComposition.lights[2].position.z = 0.0f + cos(glm::radians(360.0f * timer)) * 2.0f;
+		uboLighting.lights[2].position.x = 4.0f + sin(glm::radians(360.0f * timer)) * 2.0f;
+		uboLighting.lights[2].position.z = 0.0f + cos(glm::radians(360.0f * timer)) * 2.0f;
 
-		uboComposition.lights[4].position.x = 0.0f + sin(glm::radians(360.0f * timer + 90.0f)) * 5.0f;
-		uboComposition.lights[4].position.z = 0.0f - cos(glm::radians(360.0f * timer + 45.0f)) * 5.0f;
+		uboLighting.lights[4].position.x = 0.0f + sin(glm::radians(360.0f * timer + 90.0f)) * 5.0f;
+		uboLighting.lights[4].position.z = 0.0f - cos(glm::radians(360.0f * timer + 45.0f)) * 5.0f;
 
-		uboComposition.lights[5].position.x = 0.0f + sin(glm::radians(-360.0f * timer + 135.0f)) * 10.0f;
-		uboComposition.lights[5].position.z = 0.0f - cos(glm::radians(-360.0f * timer - 45.0f)) * 10.0f;
+		uboLighting.lights[5].position.x = 0.0f + sin(glm::radians(-360.0f * timer + 135.0f)) * 10.0f;
+		uboLighting.lights[5].position.z = 0.0f - cos(glm::radians(-360.0f * timer - 45.0f)) * 10.0f;
 
 		// Current view position
-		uboComposition.viewPos = glm::vec4(camera.position, 0.0f) * glm::vec4(-1.0f, 1.0f, -1.0f, 1.0f);
+		uboLighting.view = camera.matrices.view;
 
-		uboComposition.debugDisplayTarget = debugDisplayTarget;
+		memcpy(uniformBuffers.lighting.mapped, &uboLighting, sizeof(uboLighting));
+	}
 
-		memcpy(uniformBuffers.composition.mapped, &uboComposition, sizeof(uboComposition));
+	void updateUniformBufferSsr() {
+		uboSsr.projection = camera.matrices.perspective;
+		memcpy(uniformBuffers.ssr.mapped, &uboSsr, sizeof(uboSsr));
 	}
 
 	void setupDescriptorSetLayout()
@@ -579,18 +656,12 @@ public:
 		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
 			// Binding 0 : Vertex shader uniform buffer
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
-			// Binding 1 : Scene colormap
+			// Binding 1 : Color map / Position target
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
-			// Binding 2 : Scene normalmap
+			// Binding 2 : Normal map / Normal target
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 2),
-			// Binding 3 : Position texture target
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, VK_SHADER_STAGE_FRAGMENT_BIT, 3),
-			// Binding 4 : Normals texture target
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, VK_SHADER_STAGE_FRAGMENT_BIT, 4),
-			// Binding 5 : Albedo texture target
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, VK_SHADER_STAGE_FRAGMENT_BIT, 5),
-			// Binding 6 : Fragment shader uniform buffer
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 6),
+			// Binding 3 : Fragment shader uniform buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 3),
 		};
 
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
@@ -634,12 +705,11 @@ public:
 
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.prez));
 
-		// geometry subpass pipeline
+		// direct lighting subpass pipeline
 		pipelineCI.subpass = 1;
 		pipelineCI.pVertexInputState = vkglTF::Vertex::getPipelineVertexInputState({
 			vkglTF::VertexComponent::Position,
 			vkglTF::VertexComponent::UV,
-			vkglTF::VertexComponent::Color,
 			vkglTF::VertexComponent::Normal,
 			vkglTF::VertexComponent::Tangent
 			});
@@ -653,12 +723,12 @@ public:
 		depthStencilState.depthWriteEnable = VK_FALSE;
 		depthStencilState.depthCompareOp = VK_COMPARE_OP_EQUAL;
 
-		shaderStages[0] = loadShader(getShadersPath() + "ssr/geometry.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-		shaderStages[1] = loadShader(getShadersPath() + "ssr/geometry.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+		shaderStages[0] = loadShader(getShadersPath() + "ssr/lighting.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+		shaderStages[1] = loadShader(getShadersPath() + "ssr/lighting.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
-		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.geometry));
+		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.lighting));
 
-		// lighting subpass pipeline
+		// ssr subpass pipeline
 		pipelineCI.subpass = 2;
 		VkPipelineVertexInputStateCreateInfo emptyInputState = vks::initializers::pipelineVertexInputStateCreateInfo();
 		pipelineCI.pVertexInputState = &emptyInputState;
@@ -666,21 +736,27 @@ public:
 		rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT;
 		pipelineCI.pDepthStencilState = nullptr;
 
-		shaderStages[0] = loadShader(getShadersPath() + "ssr/lighting.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-		shaderStages[1] = loadShader(getShadersPath() + "ssr/lighting.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+		shaderStages[0] = loadShader(getShadersPath() + "ssr/ssr.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+		shaderStages[1] = loadShader(getShadersPath() + "ssr/ssr.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
-		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.lighting));
+		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.ssr));
+
+		// composition subpass pipeline
+		pipelineCI.subpass = 3;
+		shaderStages[0] = loadShader(getShadersPath() + "ssr/composition.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+		shaderStages[1] = loadShader(getShadersPath() + "ssr/composition.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.composition));
 	}
 
 	void setupDescriptorPool()
 	{
 		std::vector<VkDescriptorPoolSize> poolSizes = {
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4),
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4),
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 3)
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 6),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8)
 		};
 
-		VkDescriptorPoolCreateInfo descriptorPoolInfo = vks::initializers::descriptorPoolCreateInfo(poolSizes, 4);
+		VkDescriptorPoolCreateInfo descriptorPoolInfo = vks::initializers::descriptorPoolCreateInfo(poolSizes, 5);
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 	}
 
@@ -694,57 +770,71 @@ public:
 		*/
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsPrez));
 		writeDescriptorSets = {
-			// Binding 0: Vertex shader uniform buffer
-			vks::initializers::writeDescriptorSet(dsPrez, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.offscreen.descriptor),
+			// Binding 0: Transform
+			vks::initializers::writeDescriptorSet(dsPrez, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.vs.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 
 		/*
-			Geometry subpass
+			Direct lighting subpass
 		*/
 		// Model
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsGeometry.model));
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsLighting.model));
 		writeDescriptorSets = {
-			// Binding 0: Vertex shader uniform buffer
-			vks::initializers::writeDescriptorSet(dsGeometry.model, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.offscreen.descriptor),
+			// Binding 0: Transform
+			vks::initializers::writeDescriptorSet(dsLighting.model, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.vs.descriptor),
 			// Binding 1: Color map
-			vks::initializers::writeDescriptorSet(dsGeometry.model, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textures.model.colorMap.descriptor),
+			vks::initializers::writeDescriptorSet(dsLighting.model, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textures.model.colorMap.descriptor),
 			// Binding 2: Normal map
-			vks::initializers::writeDescriptorSet(dsGeometry.model, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &textures.model.normalMap.descriptor)
+			vks::initializers::writeDescriptorSet(dsLighting.model, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &textures.model.normalMap.descriptor),
+			// Binding 3: Light info
+			vks::initializers::writeDescriptorSet(dsLighting.model, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3, &uniformBuffers.lighting.descriptor)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 
 		// Floor
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsGeometry.floor));
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsLighting.floor));
 		writeDescriptorSets = {
-			// Binding 0: Vertex shader uniform buffer
-			vks::initializers::writeDescriptorSet(dsGeometry.floor, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.offscreen.descriptor),
+			// Binding 0: Transform
+			vks::initializers::writeDescriptorSet(dsLighting.floor, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.vs.descriptor),
 			// Binding 1: Color map
-			vks::initializers::writeDescriptorSet(dsGeometry.floor, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textures.floor.colorMap.descriptor),
+			vks::initializers::writeDescriptorSet(dsLighting.floor, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textures.floor.colorMap.descriptor),
 			// Binding 2: Normal map
-			vks::initializers::writeDescriptorSet(dsGeometry.floor, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &textures.floor.normalMap.descriptor)
+			vks::initializers::writeDescriptorSet(dsLighting.floor, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &textures.floor.normalMap.descriptor),
+			// Binding 3: Light calculation info
+			vks::initializers::writeDescriptorSet(dsLighting.floor, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3, &uniformBuffers.lighting.descriptor)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 
 		/*
-			Lighting subpass
+			SSR subpass
 		*/
-		// Image descriptors for the offscreen color attachments
-		VkDescriptorImageInfo texDescriptorPosition = { VK_NULL_HANDLE, positionFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-		VkDescriptorImageInfo texDescriptorNormal = { VK_NULL_HANDLE, normalFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-		VkDescriptorImageInfo texDescriptorAlbedo = { VK_NULL_HANDLE, colorFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorImageInfo descriptorPosition = { colorSampler, positionFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorImageInfo descriptorNormal = { colorSampler, normalFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
-		// Deferred composition
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsLighting));
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsSsr));
 		writeDescriptorSets = {
-			// Binding 1 : Position texture target
-			vks::initializers::writeDescriptorSet(dsLighting, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 3, &texDescriptorPosition),
-			// Binding 2 : Normals texture target
-			vks::initializers::writeDescriptorSet(dsLighting, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 4, &texDescriptorNormal),
-			// Binding 3 : Albedo texture target
-			vks::initializers::writeDescriptorSet(dsLighting, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 5, &texDescriptorAlbedo),
-			// Binding 4 : Fragment shader uniform buffer
-			vks::initializers::writeDescriptorSet(dsLighting, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 6, &uniformBuffers.composition.descriptor),
+			// Binding 1: Position target
+			vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &descriptorPosition),
+			// Binding 2: Normal target
+			vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &descriptorNormal),
+			// Binding 3: SSR calculation info
+			vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3, &uniformBuffers.ssr.descriptor),
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
+
+		/*
+			Composition subpass
+		*/
+		VkDescriptorImageInfo descriptorDirect = { colorSampler, directColorFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorImageInfo descriptorReflect = { colorSampler, reflectUvFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsComposition));
+		writeDescriptorSets = {
+			// Binding 1: Direct light result target
+			vks::initializers::writeDescriptorSet(dsComposition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &descriptorDirect),
+			// Binding 2: Reflect UV target
+			vks::initializers::writeDescriptorSet(dsComposition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &descriptorReflect),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 	}
@@ -753,12 +843,13 @@ public:
 	{
 		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
 
-		std::array<VkClearValue, 5> clearValues;
+		std::array<VkClearValue, 6> clearValues;
 		clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
 		clearValues[1].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
 		clearValues[2].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
 		clearValues[3].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-		clearValues[4].depthStencil = { 1.0f, 0 };
+		clearValues[4].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+		clearValues[5].depthStencil = { 1.0f, 0 };
 
 		VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
 		renderPassBeginInfo.renderPass = renderPass;
@@ -798,30 +889,42 @@ public:
 			}
 
 			/*
-				subpass 1: geometry
+				subpass 1: direct lighting
 			*/
 			{
 				vkCmdNextSubpass(drawCmdBuffers[i], VK_SUBPASS_CONTENTS_INLINE);
 
-				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.geometry);
+				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.lighting);
 
 				// Models
-				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &dsGeometry.model, 0, nullptr);
+				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &dsLighting.model, 0, nullptr);
 				models.model.bindBuffers(drawCmdBuffers[i]);
 				vkCmdDrawIndexed(drawCmdBuffers[i], models.model.indices.count, 3, 0, 0, 0);
 				// Floor
-				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &dsGeometry.floor, 0, nullptr);
+				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &dsLighting.floor, 0, nullptr);
 				models.floor.draw(drawCmdBuffers[i]);
 			}
 
 			/*
-				subpass 2: lighting
+				subpass 2: ssr
 			*/
 			{
 				vkCmdNextSubpass(drawCmdBuffers[i], VK_SUBPASS_CONTENTS_INLINE);
 
-				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &dsLighting, 0, nullptr);
-				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.lighting);
+				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &dsSsr, 0, nullptr);
+				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.ssr);
+
+				vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
+			}
+
+			/*
+				subpass 3: composition
+			*/
+			{
+				vkCmdNextSubpass(drawCmdBuffers[i], VK_SUBPASS_CONTENTS_INLINE);
+
+				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &dsComposition, 0, nullptr);
+				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.composition);
 
 				vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
 			}
@@ -868,20 +971,27 @@ public:
 		draw();
 		if (!paused)
 		{
-			updateUniformBufferComposition();
+			updateUniformBufferLighting();
 		}
 		if (camera.updated)
 		{
-			updateUniformBufferOffscreen();	
+			updateUniformBufferVS();
+			updateUniformBufferLighting();
+			updateUniformBufferSsr();
 		}
 	}
 
 	virtual void OnUpdateUIOverlay(vks::UIOverlay *overlay)
 	{
 		if (overlay->header("Settings")) {
-			if (overlay->comboBox("Display", &debugDisplayTarget, {"Final composition", "Position", "Normals", "Albedo", "Specular" }))
-			{
-				updateUniformBufferComposition();
+			if (overlay->sliderFloat("Max Distance", &uboSsr.maxDistance, 0.0f, 5.0)) {
+				updateUniformBufferSsr();
+			}
+			if (overlay->sliderFloat("Resolution", &uboSsr.resolution, 0.0f, 1.0)) {
+				updateUniformBufferSsr();
+			}
+			if (overlay->sliderFloat("Thickness", &uboSsr.thickness, 0.0f, 10.0)) {
+				updateUniformBufferSsr();
 			}
 		}
 	}
