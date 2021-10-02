@@ -9,7 +9,7 @@ workspace "VulkanDemo"
     }
 
     vpaths{
-        ["shaders"] = { "**.vert", "**.frag", "**.comp" }
+        ["shaders"] = { "**.vert", "**.frag", "**.comp", "**.geom" }
     }
 
     cfgDir = "%{cfg.buildcfg}-%{cfg.architecture}"
@@ -25,3 +25,4 @@ workspace "VulkanDemo"
     include "demo/ArrayOfDescriptor"
     include "demo/renderpasses"
     include "demo/ssr"
+    include "demo/final"
