@@ -15,7 +15,7 @@ workspace "VulkanDemo"
     cfgDir = "%{cfg.buildcfg}-%{cfg.architecture}"
     vulkanLib = "C:/VulkanSDK/1.2.148.0/Lib/vulkan-1.lib"
 
-    startproject "gpuCull"
+    startproject "final"
 
     include "demo/base"
     include "demo/gpuCull"

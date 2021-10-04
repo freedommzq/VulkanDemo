@@ -30,15 +30,16 @@ void main()
 
 	// World space
 	vec4 P = texture(samplerPosition, inUV);
-	if(P.w != 1.0){
+	vec4 N = texture(samplerNormal, inUV);
+	if(N.w != 1.0){
 		outFragcolor = vec4(reflectColor, 1.0);
 		return;
 	}
 
 	// Transform to view space
-	vec3 fragPos = vec3(ubo.view * P);
+	vec3 fragPos = vec3(ubo.view * vec4(P.xyz, 1.0));
 	mat3 mNormal = transpose(inverse(mat3(ubo.view)));
-	vec3 normal = mNormal * texture(samplerNormal, inUV).xyz;
+	vec3 normal = mNormal * N.xyz;
 
 	vec3 viewRay = normalize(fragPos);
 	vec3 reflectRayUnit = reflect(viewRay, normal);
@@ -73,7 +74,7 @@ void main()
 		percentage = clamp(percentage, 0.0, 1.0);
 		float marchDepthViewSpace = (startPos.z * endPos.z) / mix(endPos.z, startPos.z, percentage);
 
-		vec3 marchPos = vec3(ubo.view * texture(samplerPosition, uv));
+		vec3 marchPos = vec3(ubo.view * vec4(texture(samplerPosition, uv).xyz, 1.0));
 
 		float depthDelta = marchDepthViewSpace - marchPos.z;
 		if(depthDelta < 0){

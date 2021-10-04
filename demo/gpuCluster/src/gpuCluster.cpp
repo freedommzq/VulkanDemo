@@ -680,8 +680,8 @@ void VulkanExample::preparePipelines()
 	pipelineCI.stageCount = static_cast<uint32_t>(shaderStages.size());
 	pipelineCI.pStages = shaderStages.data();
 
-	shaderStages[0] = loadShader(getShadersPath() + "gpuCluster/scene.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-	shaderStages[1] = loadShader(getShadersPath() + "gpuCluster/scene.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+	shaderStages[0] = loadShader(getShadersPath() + "gpuCluster/spirv/scene.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+	shaderStages[1] = loadShader(getShadersPath() + "gpuCluster/spirv/scene.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
 	// POI: Instead if using a few fixed pipelines, we create one pipeline for each material using the properties of that material
 	for (auto &material : glTFScene.materials) {
@@ -733,7 +733,7 @@ void VulkanExample::preparePipelines()
 	//================================================================
 	// Compute Pipeline
 	VkComputePipelineCreateInfo computePipelineCreateInfo = vks::initializers::computePipelineCreateInfo(clusterPipelineLayout);
-	computePipelineCreateInfo.stage = loadShader(getShadersPath() + "gpuCluster/cluster.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+	computePipelineCreateInfo.stage = loadShader(getShadersPath() + "gpuCluster/spirv/cluster.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
 
 	struct ClusterSpecializationData {
 		uint32_t maxListSize;

@@ -11,7 +11,7 @@ layout (location = 0) out vec4 outFragColor;
 
 #define LIGHT_COUNT 3
 #define SHADOW_FACTOR 0.25
-#define AMBIENT_LIGHT 0.1
+#define AMBIENT_LIGHT 0.2
 #define USE_PCF
 
 struct Light 

@@ -416,8 +416,8 @@ public:
 
 		// Shaders
 		std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages;
-		shaderStages[0] = loadShader(getShadersPath() + "ArrayOfDescriptor/ArrayOfDescriptor.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-		shaderStages[1] = loadShader(getShadersPath() + "ArrayOfDescriptor/ArrayOfDescriptor.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+		shaderStages[0] = loadShader(getShadersPath() + "ArrayOfDescriptor/spirv/ArrayOfDescriptor.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+		shaderStages[1] = loadShader(getShadersPath() + "ArrayOfDescriptor/spirv/ArrayOfDescriptor.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
 		VkGraphicsPipelineCreateInfo pipelineCreateInfo = vks::initializers::pipelineCreateInfo(pipelineLayout, renderPass);
 		pipelineCreateInfo.pVertexInputState = &inputState;
