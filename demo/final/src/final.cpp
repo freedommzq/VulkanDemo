@@ -14,7 +14,6 @@
 #define ENABLE_VALIDATION true
 
 #define SSAO_KERNEL_SIZE 32
-#define SSAO_RADIUS 0.3f
 #define SSAO_NOISE_DIM 4
 
 // Shadowmap properties
@@ -31,8 +30,8 @@
 #define FB_DIM std::max(width,height)
 #else
 #define FB_DIM 2048
-#define LIGHTING_FB_DIM 1024
-#define SSAO_FB_DIM 1024
+#define SSAO_FB_DIM 512
+#define LIGHTING_FB_DIM 2048
 #define SSR_FB_DIM 512
 #endif
 
@@ -42,8 +41,6 @@
 class VulkanExample : public VulkanExampleBase
 {
 public:
-	bool enableShadows = true;
-
 	// Keep depth range as small as possible
 	// for better shadow map precision
 	float zNear = 0.1f;
@@ -78,8 +75,9 @@ public:
 	struct {
 		vks::Buffer shadowGeometryShader;
 		vks::Buffer geometry;
-		vks::Buffer lighting;
 		vks::Buffer ssao;
+		vks::Buffer ssaoBlur;
+		vks::Buffer lighting;
 		vks::Buffer ssr;
 		vks::Buffer composition;
 	} uniformBuffers;
@@ -101,6 +99,18 @@ public:
 		int layer;
 	} uboGeometry;
 
+	struct {
+		glm::mat4 projection;
+		glm::mat4 view;
+		alignas(4) float radius = 0.5f;
+		alignas(4) float bias = 0.04f;
+		alignas(16) glm::vec4 kernel[SSAO_KERNEL_SIZE];
+	} uboSsao;
+
+	struct {
+		int32_t size = 1;
+	} uboSsaoBlur;
+
 	// Direct Lighting Pass (generate direct scene color)
 	struct Light {
 		glm::vec4 position;
@@ -108,18 +118,12 @@ public:
 		glm::vec4 color;
 		glm::mat4 viewMatrix;
 	};
-
 	struct {
 		glm::vec4 viewPos;
 		Light lights[LIGHT_COUNT];
-		uint32_t useShadows = 1;
+		int32_t useShadow = 1;
+		int32_t useSsao = 1;
 	} uboDirectLighting;
-
-	struct {
-		glm::mat4 projection;
-		glm::mat4 view;
-		glm::vec4 kernel[SSAO_KERNEL_SIZE];
-	} uboSsao;
 
 	struct {
 		glm::mat4 projection;
@@ -134,9 +138,7 @@ public:
 
 	struct {
 		int32_t ssrBlurSize = 1;
-		int32_t ssaoBlurSize = 1;
 		float blendFactor = 0.2;
-		int32_t useSsao = 1;
 	}uboComposition;
 
 	/*
@@ -148,8 +150,9 @@ public:
 	struct {
 		VkPipeline shadowpass;
 		VkPipeline geometry;
-		VkPipeline lighting;
 		VkPipeline ssao;
+		VkPipeline ssaoBlur;
+		VkPipeline lighting;
 		VkPipeline ssr;
 		VkPipeline composition;
 	} pipelines;
@@ -158,8 +161,9 @@ public:
 		VkDescriptorSet shadow;
 		VkDescriptorSet model;
 		VkDescriptorSet background;
-		VkDescriptorSet lighting;
 		VkDescriptorSet ssao;
+		VkDescriptorSet ssaoBlur;
+		VkDescriptorSet lighting;
 		VkDescriptorSet ssr;
 	} descriptorSets;
 	VkDescriptorSet descriptorSet; // composition
@@ -170,21 +174,24 @@ public:
 		// Framebuffer resources for the shadow pass
 		vks::Framebuffer *shadow;
 
-		vks::Framebuffer *lighting;
 		vks::Framebuffer *ssao;
+		vks::Framebuffer *ssaoBlur;
+		vks::Framebuffer *lighting;
 		vks::Framebuffer *ssr;
 	} frameBuffers;
 
 	struct {
 		VkCommandBuffer geometry = VK_NULL_HANDLE; // shadow & geometry
-		VkCommandBuffer lighting = VK_NULL_HANDLE;
 		VkCommandBuffer ssao = VK_NULL_HANDLE;
+		VkCommandBuffer ssaoBlur = VK_NULL_HANDLE;
+		VkCommandBuffer lighting = VK_NULL_HANDLE;
 		VkCommandBuffer ssr = VK_NULL_HANDLE;
 	} commandBuffers;
 
 	VkSemaphore geometrySemaphore = VK_NULL_HANDLE;
-	VkSemaphore lightingSemaphore = VK_NULL_HANDLE;
 	VkSemaphore ssaoSemaphore = VK_NULL_HANDLE;
+	VkSemaphore ssaoBlurSemaphore = VK_NULL_HANDLE;
+	VkSemaphore lightingSemaphore = VK_NULL_HANDLE;
 	VkSemaphore ssrSemaphore = VK_NULL_HANDLE;
 
 	float lerp(float a, float b, float f) { return a + f * (b - a); }
@@ -212,14 +219,16 @@ public:
 		// Frame buffers
 		if (frameBuffers.shadow) delete frameBuffers.shadow;
 		if (frameBuffers.geometry) delete frameBuffers.geometry;
-		if (frameBuffers.lighting) delete frameBuffers.lighting;
 		if (frameBuffers.ssao) delete frameBuffers.ssao;
+		if (frameBuffers.ssaoBlur) delete frameBuffers.ssaoBlur;
+		if (frameBuffers.lighting) delete frameBuffers.lighting;
 		if (frameBuffers.ssr) delete frameBuffers.ssr;
 
 		vkDestroyPipeline(device, pipelines.shadowpass, nullptr);
 		vkDestroyPipeline(device, pipelines.geometry, nullptr);
-		vkDestroyPipeline(device, pipelines.lighting, nullptr);
 		vkDestroyPipeline(device, pipelines.ssao, nullptr);
+		vkDestroyPipeline(device, pipelines.ssaoBlur, nullptr);
+		vkDestroyPipeline(device, pipelines.lighting, nullptr);
 		vkDestroyPipeline(device, pipelines.ssr, nullptr);
 		vkDestroyPipeline(device, pipelines.composition, nullptr);
 
@@ -229,8 +238,9 @@ public:
 		// Uniform buffers
 		uniformBuffers.shadowGeometryShader.destroy();
 		uniformBuffers.geometry.destroy();
-		uniformBuffers.lighting.destroy();
 		uniformBuffers.ssao.destroy();
+		uniformBuffers.ssaoBlur.destroy();
+		uniformBuffers.lighting.destroy();
 		uniformBuffers.ssr.destroy();
 		uniformBuffers.composition.destroy();
 
@@ -242,8 +252,9 @@ public:
 		textures.ssaoNoise.destroy();
 
 		vkDestroySemaphore(device, geometrySemaphore, nullptr);
-		vkDestroySemaphore(device, lightingSemaphore, nullptr);
 		vkDestroySemaphore(device, ssaoSemaphore, nullptr);
+		vkDestroySemaphore(device, ssaoBlurSemaphore, nullptr);
+		vkDestroySemaphore(device, lightingSemaphore, nullptr);
 		vkDestroySemaphore(device, ssrSemaphore, nullptr);
 	}
 
@@ -348,6 +359,50 @@ public:
 		VK_CHECK_RESULT(frameBuffers.geometry->createRenderPass());
 	}
 
+	void ssaoSetup()
+	{
+		frameBuffers.ssao = new vks::Framebuffer(vulkanDevice);
+
+		frameBuffers.ssao->width = SSAO_FB_DIM;
+		frameBuffers.ssao->height = SSAO_FB_DIM;
+
+		vks::AttachmentCreateInfo attachmentInfo = {};
+		attachmentInfo.width = SSAO_FB_DIM;
+		attachmentInfo.height = SSAO_FB_DIM;
+		attachmentInfo.layerCount = 1;
+		attachmentInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		attachmentInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+		frameBuffers.ssao->addAttachment(attachmentInfo);
+
+		// Create sampler to sample from the color attachments
+		VK_CHECK_RESULT(frameBuffers.ssao->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+
+		// Create default renderpass for the framebuffer
+		VK_CHECK_RESULT(frameBuffers.ssao->createRenderPass());
+	}
+
+	void ssaoBlurSetup()
+	{
+		frameBuffers.ssaoBlur = new vks::Framebuffer(vulkanDevice);
+
+		frameBuffers.ssaoBlur->width = SSAO_FB_DIM;
+		frameBuffers.ssaoBlur->height = SSAO_FB_DIM;
+
+		vks::AttachmentCreateInfo attachmentInfo = {};
+		attachmentInfo.width = SSAO_FB_DIM;
+		attachmentInfo.height = SSAO_FB_DIM;
+		attachmentInfo.layerCount = 1;
+		attachmentInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		attachmentInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+		frameBuffers.ssaoBlur->addAttachment(attachmentInfo);
+
+		// Create sampler to sample from the color attachments
+		VK_CHECK_RESULT(frameBuffers.ssaoBlur->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+
+		// Create default renderpass for the framebuffer
+		VK_CHECK_RESULT(frameBuffers.ssaoBlur->createRenderPass());
+	}
+
 	void directLightingSetup()
 	{
 		frameBuffers.lighting = new vks::Framebuffer(vulkanDevice);
@@ -369,29 +424,6 @@ public:
 
 		// Create default renderpass for the framebuffer
 		VK_CHECK_RESULT(frameBuffers.lighting->createRenderPass());
-	}
-	
-	void ssaoSetup()
-	{
-		frameBuffers.ssao = new vks::Framebuffer(vulkanDevice);
-
-		frameBuffers.ssao->width = SSAO_FB_DIM;
-		frameBuffers.ssao->height = SSAO_FB_DIM;
-
-		// 1 color attachment (reflect color)
-		vks::AttachmentCreateInfo attachmentInfo = {};
-		attachmentInfo.width = SSAO_FB_DIM;
-		attachmentInfo.height = SSAO_FB_DIM;
-		attachmentInfo.layerCount = 1;
-		attachmentInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		attachmentInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-		frameBuffers.ssao->addAttachment(attachmentInfo);
-
-		// Create sampler to sample from the color attachments
-		VK_CHECK_RESULT(frameBuffers.ssao->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
-
-		// Create default renderpass for the framebuffer
-		VK_CHECK_RESULT(frameBuffers.ssao->createRenderPass());
 	}
 
 	void ssrSetup()
@@ -513,49 +545,6 @@ public:
 		VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffers.geometry));
 	}
 
-	void buildLightingCommandBuffer()
-	{
-		if (commandBuffers.lighting == VK_NULL_HANDLE)
-		{
-			commandBuffers.lighting = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, false);
-		}
-
-		// Create a semaphore used to synchronize geometry rendering and usage
-		VkSemaphoreCreateInfo semaphoreCreateInfo = vks::initializers::semaphoreCreateInfo();
-		VK_CHECK_RESULT(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &lightingSemaphore));
-
-		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
-
-		VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
-		std::array<VkClearValue, 1> clearValues = {};
-		clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-
-		renderPassBeginInfo.renderPass = frameBuffers.lighting->renderPass;
-		renderPassBeginInfo.framebuffer = frameBuffers.lighting->framebuffer;
-		renderPassBeginInfo.renderArea.extent.width = frameBuffers.lighting->width;
-		renderPassBeginInfo.renderArea.extent.height = frameBuffers.lighting->height;
-		renderPassBeginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());;
-		renderPassBeginInfo.pClearValues = clearValues.data();
-
-		VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffers.lighting, &cmdBufInfo));
-
-		VkViewport viewport = vks::initializers::viewport((float)frameBuffers.lighting->width, (float)frameBuffers.lighting->height, 0.0f, 1.0f);
-		vkCmdSetViewport(commandBuffers.lighting, 0, 1, &viewport);
-
-		VkRect2D scissor = vks::initializers::rect2D(frameBuffers.lighting->width, frameBuffers.lighting->height, 0, 0);
-		vkCmdSetScissor(commandBuffers.lighting, 0, 1, &scissor);
-
-		vkCmdBeginRenderPass(commandBuffers.lighting, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-		vkCmdBindPipeline(commandBuffers.lighting, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.lighting);
-		vkCmdBindDescriptorSets(commandBuffers.lighting, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets.lighting, 0, NULL);
-		vkCmdDraw(commandBuffers.lighting, 3, 1, 0, 0);
-
-		vkCmdEndRenderPass(commandBuffers.lighting);
-
-		VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffers.lighting));
-	}
-
 	void buildSsaoCommandBuffer()
 	{
 		if (commandBuffers.ssao == VK_NULL_HANDLE)
@@ -597,6 +586,92 @@ public:
 		vkCmdEndRenderPass(commandBuffers.ssao);
 
 		VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffers.ssao));
+	}
+
+	void buildSsaoBlurCommandBuffer()
+	{
+		if (commandBuffers.ssaoBlur == VK_NULL_HANDLE)
+		{
+			commandBuffers.ssaoBlur = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, false);
+		}
+
+		// Create a semaphore used to synchronize geometry rendering and usage
+		VkSemaphoreCreateInfo semaphoreCreateInfo = vks::initializers::semaphoreCreateInfo();
+		VK_CHECK_RESULT(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &ssaoBlurSemaphore));
+
+		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
+
+		VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
+		std::array<VkClearValue, 1> clearValues = {};
+		clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+
+		renderPassBeginInfo.renderPass = frameBuffers.ssaoBlur->renderPass;
+		renderPassBeginInfo.framebuffer = frameBuffers.ssaoBlur->framebuffer;
+		renderPassBeginInfo.renderArea.extent.width = frameBuffers.ssaoBlur->width;
+		renderPassBeginInfo.renderArea.extent.height = frameBuffers.ssaoBlur->height;
+		renderPassBeginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());;
+		renderPassBeginInfo.pClearValues = clearValues.data();
+
+		VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffers.ssaoBlur, &cmdBufInfo));
+
+		VkViewport viewport = vks::initializers::viewport((float)frameBuffers.ssaoBlur->width, (float)frameBuffers.ssaoBlur->height, 0.0f, 1.0f);
+		vkCmdSetViewport(commandBuffers.ssaoBlur, 0, 1, &viewport);
+
+		VkRect2D scissor = vks::initializers::rect2D(frameBuffers.ssaoBlur->width, frameBuffers.ssaoBlur->height, 0, 0);
+		vkCmdSetScissor(commandBuffers.ssaoBlur, 0, 1, &scissor);
+
+		vkCmdBeginRenderPass(commandBuffers.ssaoBlur, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+		vkCmdBindPipeline(commandBuffers.ssaoBlur, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.ssaoBlur);
+		vkCmdBindDescriptorSets(commandBuffers.ssaoBlur, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets.ssaoBlur, 0, NULL);
+		vkCmdDraw(commandBuffers.ssaoBlur, 3, 1, 0, 0);
+
+		vkCmdEndRenderPass(commandBuffers.ssaoBlur);
+
+		VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffers.ssaoBlur));
+	}
+
+	void buildLightingCommandBuffer()
+	{
+		if (commandBuffers.lighting == VK_NULL_HANDLE)
+		{
+			commandBuffers.lighting = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, false);
+		}
+
+		// Create a semaphore used to synchronize geometry rendering and usage
+		VkSemaphoreCreateInfo semaphoreCreateInfo = vks::initializers::semaphoreCreateInfo();
+		VK_CHECK_RESULT(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &lightingSemaphore));
+
+		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
+
+		VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
+		std::array<VkClearValue, 1> clearValues = {};
+		clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+
+		renderPassBeginInfo.renderPass = frameBuffers.lighting->renderPass;
+		renderPassBeginInfo.framebuffer = frameBuffers.lighting->framebuffer;
+		renderPassBeginInfo.renderArea.extent.width = frameBuffers.lighting->width;
+		renderPassBeginInfo.renderArea.extent.height = frameBuffers.lighting->height;
+		renderPassBeginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());;
+		renderPassBeginInfo.pClearValues = clearValues.data();
+
+		VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffers.lighting, &cmdBufInfo));
+
+		VkViewport viewport = vks::initializers::viewport((float)frameBuffers.lighting->width, (float)frameBuffers.lighting->height, 0.0f, 1.0f);
+		vkCmdSetViewport(commandBuffers.lighting, 0, 1, &viewport);
+
+		VkRect2D scissor = vks::initializers::rect2D(frameBuffers.lighting->width, frameBuffers.lighting->height, 0, 0);
+		vkCmdSetScissor(commandBuffers.lighting, 0, 1, &scissor);
+
+		vkCmdBeginRenderPass(commandBuffers.lighting, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+		vkCmdBindPipeline(commandBuffers.lighting, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.lighting);
+		vkCmdBindDescriptorSets(commandBuffers.lighting, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets.lighting, 0, NULL);
+		vkCmdDraw(commandBuffers.lighting, 3, 1, 0, 0);
+
+		vkCmdEndRenderPass(commandBuffers.lighting);
+
+		VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffers.lighting));
 	}
 
 	void buildSsrCommandBuffer()
@@ -715,15 +790,15 @@ public:
 	{
 		std::vector<VkDescriptorPoolSize> poolSizes =
 		{
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 7),
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16)
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 8),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18)
 		};
 
 		VkDescriptorPoolCreateInfo descriptorPoolInfo =
 			vks::initializers::descriptorPoolCreateInfo(
 				static_cast<uint32_t>(poolSizes.size()),
 				poolSizes.data(),
-				7);
+				8);
 
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 	}
@@ -744,6 +819,8 @@ public:
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 4),
 			// Binding 5: Shadow map
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 5),
+			// Binding 6: Blured ao
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 6),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &descriptorSetLayout));
@@ -796,9 +873,8 @@ public:
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 
 		/*
-			LIGHTING
+			SSAO
 		*/
-		// Image descriptors for the geometry color attachments
 		VkDescriptorImageInfo texDescriptorPosition =
 			vks::initializers::descriptorImageInfo(
 				frameBuffers.geometry->sampler,
@@ -811,6 +887,38 @@ public:
 				frameBuffers.geometry->attachments[1].view,
 				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.ssao));
+		writeDescriptorSets = {
+			// Binding 1: World space position texture
+			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorPosition),
+			// Binding 2: World space normals texture
+			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorNormal),
+			// Binding 3: SSAO noise texture
+			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &textures.ssaoNoise.descriptor),
+			// Binding 4: Fragment shader uniform buffer
+			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.ssao.descriptor),
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+
+		/*
+			SSAO BLUR
+		*/
+		VkDescriptorImageInfo texDescriptorSsao =
+			vks::initializers::descriptorImageInfo(
+				frameBuffers.ssao->sampler,
+				frameBuffers.ssao->attachments[0].view,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.ssaoBlur));
+		writeDescriptorSets = {
+			vks::initializers::writeDescriptorSet(descriptorSets.ssaoBlur, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorSsao),
+			vks::initializers::writeDescriptorSet(descriptorSets.ssaoBlur, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.ssaoBlur.descriptor),
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+
+		/*
+			LIGHTING
+		*/
 		VkDescriptorImageInfo texDescriptorAlbedo =
 			vks::initializers::descriptorImageInfo(
 				frameBuffers.geometry->sampler,
@@ -822,6 +930,12 @@ public:
 				frameBuffers.shadow->sampler,
 				frameBuffers.shadow->attachments[0].view,
 				VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+
+		VkDescriptorImageInfo texDescriptorSsaoBlur =
+			vks::initializers::descriptorImageInfo(
+				frameBuffers.ssaoBlur->sampler,
+				frameBuffers.ssaoBlur->attachments[0].view,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.lighting));
 		writeDescriptorSets = {
@@ -835,22 +949,8 @@ public:
 			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.lighting.descriptor),
 			// Binding 5: Shadow map
 			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5, &texDescriptorShadowMap),
-		};
-		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
-
-		/*
-			SSAO
-		*/
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.ssao));
-		writeDescriptorSets = {
-			// Binding 1: World space position texture
-			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorPosition),
-			// Binding 2: World space normals texture
-			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorNormal),
-			// Binding 3: SSAO noise texture
-			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &textures.ssaoNoise.descriptor),
-			// Binding 4: Fragment shader uniform buffer
-			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.ssao.descriptor),
+			// Binding 6: Blured ao
+			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6, &texDescriptorSsaoBlur),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -885,20 +985,12 @@ public:
 				frameBuffers.ssr->attachments[0].view,
 				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-		VkDescriptorImageInfo texDescriptorSsao =
-			vks::initializers::descriptorImageInfo(
-				frameBuffers.ssao->sampler,
-				frameBuffers.ssao->attachments[0].view,
-				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
 		writeDescriptorSets = {
 			// Binding 1: Direct lighting color texture
 			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorDirectColor),
 			// Binding 2: Reflect color texture
 			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorReflectColor),
-			// Binding 3: SSAO texture
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &texDescriptorSsao),
 			// Binding 4: Fragment shader uniform buffer
 			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.composition.descriptor),
 		};
@@ -951,9 +1043,9 @@ public:
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.geometry));
 
 		/*
-			LIGHTING
+			SSAO
 		*/
-		pipelineCI.renderPass = frameBuffers.lighting->renderPass;
+		pipelineCI.renderPass = frameBuffers.ssao->renderPass;
 
 		VkPipelineVertexInputStateCreateInfo emptyInputState = vks::initializers::pipelineVertexInputStateCreateInfo();
 		pipelineCI.pVertexInputState = &emptyInputState;
@@ -963,18 +1055,27 @@ public:
 		colorBlendState.pAttachments = &blendAttachmentState;
 
 		shaderStages[0] = loadShader(getShadersPath() + "final/spirv/screenQuad.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/lighting.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-
-		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.lighting));
-
-		/*
-			SSAO
-		*/
-		pipelineCI.renderPass = frameBuffers.ssao->renderPass;
-
 		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/ssao.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.ssao));
+
+		/*
+			SSAO BLUR
+		*/
+		pipelineCI.renderPass = frameBuffers.ssaoBlur->renderPass;
+
+		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/ssaoBlur.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.ssaoBlur));
+
+		/*
+			LIGHTING
+		*/
+		pipelineCI.renderPass = frameBuffers.lighting->renderPass;
+
+		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/lighting.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.lighting));
 
 		/*
 			SSR
@@ -1039,19 +1140,26 @@ public:
 			&uniformBuffers.geometry,
 			sizeof(uboGeometry)));
 
-		// Direct lighting fragment shader
-		VK_CHECK_RESULT(vulkanDevice->createBuffer(
-			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&uniformBuffers.lighting,
-			sizeof(uboDirectLighting)));
-
 		// SSAO fragment shader
 		vulkanDevice->createBuffer(
 			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 			&uniformBuffers.ssao,
 			sizeof(uboSsao));
+
+		// SSAO blur fragment shader
+		vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&uniformBuffers.ssaoBlur,
+			sizeof(uboSsaoBlur));
+
+		// Direct lighting fragment shader
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&uniformBuffers.lighting,
+			sizeof(uboDirectLighting)));
 
 		// SSR fragment shader
 		VK_CHECK_RESULT(vulkanDevice->createBuffer(
@@ -1070,16 +1178,14 @@ public:
 		// Map persistent
 		VK_CHECK_RESULT(uniformBuffers.shadowGeometryShader.map());
 		VK_CHECK_RESULT(uniformBuffers.geometry.map());
-		VK_CHECK_RESULT(uniformBuffers.lighting.map());
 		VK_CHECK_RESULT(uniformBuffers.ssao.map());
+		VK_CHECK_RESULT(uniformBuffers.ssaoBlur.map());
+		VK_CHECK_RESULT(uniformBuffers.lighting.map());
 		VK_CHECK_RESULT(uniformBuffers.ssr.map());
 		VK_CHECK_RESULT(uniformBuffers.composition.map());
 
 		// Init some values
 		uboGeometry.instancePos[0] = glm::vec4(0.0f);
-		//uboGeometry.instancePos[1] = glm::vec4(-4.0f, 0.0, -4.0f, 0.0f);
-		//uboGeometry.instancePos[2] = glm::vec4(4.0f, 0.0, -4.0f, 0.0f);
-
 		uboGeometry.instancePos[1] = glm::vec4(-7.0f, 0.0, -4.0f, 0.0f);
 		uboGeometry.instancePos[2] = glm::vec4(4.0f, 0.0, -6.0f, 0.0f);
 
@@ -1101,10 +1207,11 @@ public:
 
 		// Update
 		updateUniformBufferGeometry();
+		updateUniformBufferSsao();
+		updateUniformBufferSsaoBlur();
 		updateUniformBufferLighting();
 		updateUniformBufferSsr();
 		updateUniformBufferComposition();
-		updateUniformBufferSsao();
 	}
 
 	void updateUniformBufferGeometry()
@@ -1113,6 +1220,16 @@ public:
 		uboGeometry.view = camera.matrices.view;
 		uboGeometry.model = glm::mat4(1.0f);
 		memcpy(uniformBuffers.geometry.mapped, &uboGeometry, sizeof(uboGeometry));
+	}
+
+	void updateUniformBufferSsao() {
+		uboSsao.projection = camera.matrices.perspective;
+		uboSsao.view = camera.matrices.view;
+		memcpy(uniformBuffers.ssao.mapped, &uboSsao, sizeof(uboSsao));
+	}
+
+	void updateUniformBufferSsaoBlur() {
+		memcpy(uniformBuffers.ssaoBlur.mapped, &uboSsaoBlur, sizeof(uboSsaoBlur));
 	}
 
 	void updateUniformBufferLighting()
@@ -1144,11 +1261,6 @@ public:
 		uboDirectLighting.viewPos = glm::vec4(camera.position, 0.0f) * glm::vec4(-1.0f, 1.0f, -1.0f, 1.0f);
 
 		memcpy(uniformBuffers.lighting.mapped, &uboDirectLighting, sizeof(uboDirectLighting));
-	}
-
-	void updateUniformBufferSsao() {
-		uboSsao.view = camera.matrices.view;
-		memcpy(uniformBuffers.ssao.mapped, &uboSsao, sizeof(uboSsao));
 	}
 
 	void updateUniformBufferSsr() {
@@ -1189,18 +1301,24 @@ public:
 		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
 
 		submitInfo.pWaitSemaphores = &geometrySemaphore;
-		submitInfo.pSignalSemaphores = &lightingSemaphore;
-		submitInfo.commandBufferCount = 1;
-		submitInfo.pCommandBuffers = &commandBuffers.lighting;
-		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
-
-		submitInfo.pWaitSemaphores = &lightingSemaphore;
 		submitInfo.pSignalSemaphores = &ssaoSemaphore;
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &commandBuffers.ssao;
 		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
 
 		submitInfo.pWaitSemaphores = &ssaoSemaphore;
+		submitInfo.pSignalSemaphores = &ssaoBlurSemaphore;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &commandBuffers.ssaoBlur;
+		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
+
+		submitInfo.pWaitSemaphores = &ssaoBlurSemaphore;
+		submitInfo.pSignalSemaphores = &lightingSemaphore;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &commandBuffers.lighting;
+		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
+
+		submitInfo.pWaitSemaphores = &lightingSemaphore;
 		submitInfo.pSignalSemaphores = &ssrSemaphore;
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &commandBuffers.ssr;
@@ -1221,9 +1339,10 @@ public:
 
 		shadowSetup();
 		geometrySetup();
+		ssaoSetup();
+		ssaoBlurSetup();
 		directLightingSetup();
 		ssrSetup();
-		ssaoSetup();
 
 		initLights();
 		prepareUniformBuffers();
@@ -1233,8 +1352,9 @@ public:
 		setupDescriptorSet();
 
 		buildGeometryCommandBuffer();
-		buildLightingCommandBuffer();
 		buildSsaoCommandBuffer();
+		buildSsaoBlurCommandBuffer();
+		buildLightingCommandBuffer();
 		buildSsrCommandBuffer();
 		buildCommandBuffers();
 
@@ -1257,14 +1377,27 @@ public:
 
 	virtual void OnUpdateUIOverlay(vks::UIOverlay *overlay)
 	{
+		if (overlay->header("SSAO Settings")) {
+			if (overlay->sliderFloat("Radius", &uboSsao.radius, 0.0f, 2.0)) {
+				updateUniformBufferSsao();
+			}
+			if (overlay->sliderFloat("Bias", &uboSsao.bias, 0.0f, 0.2)) {
+				updateUniformBufferSsao();
+			}
+			if (overlay->sliderInt("SSAO Blur Size", &uboSsaoBlur.size, 0, 3)) {
+				updateUniformBufferSsaoBlur();
+			}
+		}
 		if (overlay->header("Direct Lighting Settings")) {
-			bool shadows = (uboDirectLighting.useShadows == 1);
-			if (overlay->checkBox("Shadows", &shadows)) {
-				uboDirectLighting.useShadows = shadows;
+			if (overlay->checkBox("Shadow", &uboDirectLighting.useShadow)) {
+				updateUniformBufferLighting();
+			}
+			if (overlay->checkBox("AO", &uboDirectLighting.useSsao)) {
 				updateUniformBufferLighting();
 			}
 		}
 		if (overlay->header("SSR Settings")) {
+			// ray marching
 			if (overlay->sliderFloat("Max Distance", &uboSsr.maxDistance, 0.0f, 5.0)) {
 				updateUniformBufferSsr();
 			}
@@ -1274,18 +1407,12 @@ public:
 			if (overlay->sliderFloat("Thickness", &uboSsr.thickness, 0.0f, 2.0)) {
 				updateUniformBufferSsr();
 			}
-		}
-		if (overlay->header("Composition Settings")) {
-			if (overlay->sliderInt("SSR Blur Size", &uboComposition.ssrBlurSize, 0, 3)) {
+			// blur
+			if (overlay->sliderInt("Blur Size", &uboComposition.ssrBlurSize, 0, 10)) {
 				updateUniformBufferComposition();
 			}
-			if (overlay->sliderInt("SSAO Blur Size", &uboComposition.ssaoBlurSize, 0, 3)) {
-				updateUniformBufferComposition();
-			}
+			// blend
 			if (overlay->sliderFloat("Blend Factor", &uboComposition.blendFactor, 0.0, 1.0)) {
-				updateUniformBufferComposition();
-			}
-			if (overlay->checkBox("Enable SSAO", &uboComposition.useSsao)) {
 				updateUniformBufferComposition();
 			}
 		}

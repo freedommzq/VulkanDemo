@@ -4,6 +4,7 @@ layout (binding = 1) uniform sampler2D samplerposition;
 layout (binding = 2) uniform sampler2D samplerNormal;
 layout (binding = 3) uniform sampler2D samplerAlbedo;
 layout (binding = 5) uniform sampler2DArray samplerShadowMap;
+layout (binding = 6) uniform sampler2D samplerSsaoBlur;
 
 layout (location = 0) in vec2 inUV;
 
@@ -11,7 +12,7 @@ layout (location = 0) out vec4 outFragColor;
 
 #define LIGHT_COUNT 3
 #define SHADOW_FACTOR 0.25
-#define AMBIENT_LIGHT 0.2
+#define AMBIENT_LIGHT 0.1
 #define USE_PCF
 
 struct Light 
@@ -26,7 +27,8 @@ layout (binding = 4) uniform UBO
 {
 	vec4 viewPos;
 	Light lights[LIGHT_COUNT];
-	int useShadows;
+	int useShadow;
+	int useSsao;
 } ubo;
 
 float textureProj(vec4 P, float layer, vec2 offset)
@@ -92,7 +94,8 @@ void main()
 	vec4 albedo = texture(samplerAlbedo, inUV);
 
 	// Ambient part
-	vec3 fragcolor  = albedo.rgb * AMBIENT_LIGHT;
+	float aoFactor = ubo.useSsao == 1 ? texture(samplerSsaoBlur, inUV).x : 1.0;
+	vec3 fragcolor  = aoFactor * albedo.rgb * AMBIENT_LIGHT;
 
 	vec3 N = normalize(normal);
 		
@@ -129,15 +132,12 @@ void main()
 		float NdotR = max(0.0, dot(R, V));
 		vec3 spec = vec3(pow(NdotR, 16.0) * albedo.a * 2.5);
 
-		fragcolor += vec3((diff + spec) * spotEffect * heightAttenuation) * ubo.lights[i].color.rgb * albedo.rgb;
+		fragcolor += vec3((aoFactor * diff + spec) * spotEffect * heightAttenuation) * ubo.lights[i].color.rgb * albedo.rgb;
 	}    	
 
 	// Shadow calculations in a separate pass
-	float shadowFactor = 1.0;
-	if (ubo.useShadows > 0)
-	{
-		shadowFactor = shadow(fragPos);
-	}
+	float shadowFactor = ubo.useShadow == 1 ? shadow(fragPos) : 1.0;
 
 	outFragColor = vec4(fragcolor * shadowFactor, 1.0);
+	//outFragColor = vec4(vec3(aoFactor), 1.0);
 }

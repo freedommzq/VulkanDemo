@@ -4,8 +4,9 @@ C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V geometry.vert -o spirv\geomet
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V geometry.frag -o spirv\geometry.frag.spv
 
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V screenQuad.vert -o spirv\screenQuad.vert.spv
-C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V lighting.frag -o spirv\lighting.frag.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V ssao.frag -o spirv\ssao.frag.spv
+C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V ssaoBlur.frag -o spirv\ssaoBlur.frag.spv
+C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V lighting.frag -o spirv\lighting.frag.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V ssr_world.frag -o spirv\ssr_world.frag.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V composition.frag -o spirv\composition.frag.spv
 pause

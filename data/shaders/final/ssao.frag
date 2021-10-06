@@ -5,12 +5,13 @@ layout (binding = 2) uniform sampler2D samplerNormal;
 layout (binding = 3) uniform sampler2D ssaoNoise;
 
 #define SSAO_KERNEL_SIZE 32
-#define SSAO_RADIUS 0.3
 
 layout (binding = 4) uniform UBO 
 {
 	mat4 projection;
 	mat4 view;
+	float radius;
+	float bias; // remove banding
 	vec4 samples[SSAO_KERNEL_SIZE];
 } ubo;
 
@@ -24,14 +25,14 @@ void main()
 	vec4 P = texture(samplerPositionDepth, inUV);
 	vec4 N = texture(samplerNormal, inUV);
 
+	if(N.w != 1.0){
+		outFragColor = 1.0;
+		return;
+	}
+
 	vec3 fragPos = vec3(ubo.view * vec4(P.xyz, 1.0));
 	mat3 mNormal = transpose(inverse(mat3(ubo.view)));
 	vec3 normal = mNormal * N.xyz;
-
-	/*
-	vec3 fragPos = texture(samplerPositionDepth, inUV).rgb;
-	vec3 normal = normalize(texture(samplerNormal, inUV).rgb);
-	*/
 
 	// Get a random vector using a noise lookup
 	ivec2 texDim = textureSize(samplerPositionDepth, 0); 
@@ -44,14 +45,11 @@ void main()
 	vec3 bitangent = cross(tangent, normal);
 	mat3 TBN = mat3(tangent, bitangent, normal);
 
-	// Calculate occlusion value
 	float occlusion = 0.0f;
-	// remove banding
-	const float bias = 0.025f;
 	for(int i = 0; i < SSAO_KERNEL_SIZE; i++)
 	{		
 		vec3 samplePos = TBN * ubo.samples[i].xyz; 
-		samplePos = fragPos + samplePos * SSAO_RADIUS; 
+		samplePos = fragPos + samplePos * ubo.radius; 
 		
 		// project
 		vec4 offset = vec4(samplePos, 1.0f);
@@ -61,8 +59,8 @@ void main()
 		
 		float sampleDepth = -texture(samplerPositionDepth, offset.xy).w; 
 
-		float rangeCheck = smoothstep(0.0f, 1.0f, SSAO_RADIUS / abs(fragPos.z - sampleDepth));
-		occlusion += (sampleDepth >= samplePos.z + bias ? 1.0f : 0.0f) * rangeCheck;           
+		float rangeCheck = smoothstep(0.0f, 1.0f, ubo.radius / abs(fragPos.z - sampleDepth));
+		occlusion += (sampleDepth >= samplePos.z + ubo.bias ? 1.0f : 0.0f) * rangeCheck;           
 	}
 	occlusion = 1.0 - (occlusion / float(SSAO_KERNEL_SIZE));
 	
