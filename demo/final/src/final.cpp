@@ -11,7 +11,7 @@
 #include "VulkanglTFModel.h"
 
 #define VERTEX_BUFFER_BIND_ID 0
-#define ENABLE_VALIDATION true
+#define ENABLE_VALIDATION false
 
 #define SSAO_KERNEL_SIZE 32
 #define SSAO_NOISE_DIM 4
@@ -139,6 +139,7 @@ public:
 	struct {
 		int32_t ssrBlurSize = 1;
 		float blendFactor = 0.2;
+		float exposure = 1.0;
 	}uboComposition;
 
 	/*
@@ -416,7 +417,7 @@ public:
 		attachmentInfo.height = LIGHTING_FB_DIM;
 		attachmentInfo.layerCount = 1;
 		attachmentInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		attachmentInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+		attachmentInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
 		frameBuffers.lighting->addAttachment(attachmentInfo);
 
 		// Create sampler to sample from the color attachments
@@ -439,7 +440,7 @@ public:
 		attachmentInfo.height = SSR_FB_DIM;
 		attachmentInfo.layerCount = 1;
 		attachmentInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		attachmentInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+		attachmentInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
 		frameBuffers.ssr->addAttachment(attachmentInfo);
 
 		// Create sampler to sample from the color attachments
@@ -1413,6 +1414,11 @@ public:
 			}
 			// blend
 			if (overlay->sliderFloat("Blend Factor", &uboComposition.blendFactor, 0.0, 1.0)) {
+				updateUniformBufferComposition();
+			}
+		}
+		if (overlay->header("HDR Settings")) {
+			if (overlay->sliderFloat("Exposure", &uboComposition.exposure, 0.0, 5.0)) {
 				updateUniformBufferComposition();
 			}
 		}
