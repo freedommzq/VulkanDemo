@@ -568,8 +568,8 @@ void VulkanExample::preparePipelines()
 	pipelineCI.stageCount = static_cast<uint32_t>(shaderStages.size());
 	pipelineCI.pStages = shaderStages.data();
 
-	shaderStages[0] = loadShader(getShadersPath() + "sponza/scene.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-	shaderStages[1] = loadShader(getShadersPath() + "sponza/scene.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+	shaderStages[0] = loadShader(getShadersPath() + "sponza/spirv/scene.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+	shaderStages[1] = loadShader(getShadersPath() + "sponza/spirv/scene.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
 	// POI: Instead if using a few fixed pipelines, we create one pipeline for each material using the properties of that material
 	for (auto &material : glTFScene.materials) {

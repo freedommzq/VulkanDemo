@@ -967,6 +967,10 @@ public:
 	{
 		VulkanExampleBase::prepare();
 
+		mrtPass.m_device = device;
+		deferredPass.m_device = device;
+		postprocessPass.m_device = device;
+
 		// 1.º”‘ÿ◊ ‘¥
 		loadAssets();
 		// 2.ubo

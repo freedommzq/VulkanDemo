@@ -11,7 +11,7 @@ public:
 
 	void destroy();
 
-	const VkDevice			m_device;
+	VkDevice			m_device;
 	const uint32_t			m_width, m_height;
 
 	VkRenderPass			m_renderPass		= VK_NULL_HANDLE;

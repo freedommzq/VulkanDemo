@@ -26,3 +26,5 @@ data/shaders/textureDDS/textureDDS.vert.spv
 data/shaders/ArrayOfDescriptor/ArrayOfDescriptor.frag.spv
 data/shaders/ArrayOfDescriptor/ArrayOfDescriptor.vert.spv
 *.ini
+data/shaders/pbr/pbr.frag.xxx
+data/shaders/pbr/pbr.vert.xxx

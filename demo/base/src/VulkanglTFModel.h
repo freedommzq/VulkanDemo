@@ -39,7 +39,8 @@ namespace vkglTF
 {
 	enum DescriptorBindingFlags {
 		ImageBaseColor = 0x00000001,
-		ImageNormalMap = 0x00000002
+		ImageNormalMap = 0x00000002,
+		ImageMetallicRoughness = 0x00000004
 	};
 
 	extern VkDescriptorSetLayout descriptorSetLayoutImage;
@@ -52,6 +53,15 @@ namespace vkglTF
 	/*
 		glTF texture loading class
 	*/
+
+	struct TextureSampler {
+		VkFilter magFilter;
+		VkFilter minFilter;
+		VkSamplerAddressMode addressModeU;
+		VkSamplerAddressMode addressModeV;
+		VkSamplerAddressMode addressModeW;
+	};
+
 	struct Texture {
 		vks::VulkanDevice* device = nullptr;
 		VkImage image;
@@ -65,33 +75,41 @@ namespace vkglTF
 		VkSampler sampler;
 		void updateDescriptor();
 		void destroy();
-		void fromglTfImage(tinygltf::Image& gltfimage, std::string path, vks::VulkanDevice* device, VkQueue copyQueue);
+		void fromglTfImage(tinygltf::Image& gltfimage, std::string path, TextureSampler textureSampler, vks::VulkanDevice* device, VkQueue copyQueue);
 	};
 
 	/*
 		glTF material class
 	*/
 	struct Material {
+		Material(vks::VulkanDevice* device) : device(device) {};
+		void createDescriptorSet(VkDescriptorPool descriptorPool, VkDescriptorSetLayout descriptorSetLayout, uint32_t descriptorBindingFlags, vkglTF::Texture* emptyTexture);
+
 		vks::VulkanDevice* device = nullptr;
-		enum AlphaMode { ALPHAMODE_OPAQUE, ALPHAMODE_MASK, ALPHAMODE_BLEND };
-		AlphaMode alphaMode = ALPHAMODE_OPAQUE;
-		float alphaCutoff = 1.0f;
-		float metallicFactor = 1.0f;
-		float roughnessFactor = 1.0f;
-		glm::vec4 baseColorFactor = glm::vec4(1.0f);
-		vkglTF::Texture* baseColorTexture = nullptr;
-		vkglTF::Texture* metallicRoughnessTexture = nullptr;
-		vkglTF::Texture* normalTexture = nullptr;
-		vkglTF::Texture* occlusionTexture = nullptr;
-		vkglTF::Texture* emissiveTexture = nullptr;
-
-		vkglTF::Texture* specularGlossinessTexture;
-		vkglTF::Texture* diffuseTexture;
-
 		VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
-		Material(vks::VulkanDevice* device) : device(device) {};
-		void createDescriptorSet(VkDescriptorPool descriptorPool, VkDescriptorSetLayout descriptorSetLayout, uint32_t descriptorBindingFlags);
+		//========================================================================
+
+		enum AlphaMode { ALPHAMODE_OPAQUE, ALPHAMODE_MASK, ALPHAMODE_BLEND }; // TODO: ALPHAMODE_BLEND indicate render primitives doubleSided now
+		AlphaMode alphaMode = ALPHAMODE_OPAQUE;
+		float alphaCutoff = 1.0f;
+
+		//=========================================================================
+
+		glm::vec4 baseColorFactor = glm::vec4(1.0);
+		vkglTF::Texture* baseColorTexture = nullptr;
+
+		vkglTF::Texture* normalTexture = nullptr;
+
+		float metallicFactor = 1.0f;
+		float roughnessFactor = 1.0f;
+		vkglTF::Texture* metallicRoughnessTexture = nullptr;
+
+		struct TexCoordSets {
+			uint8_t baseColor = 0;
+			uint8_t normal = 0;
+			uint8_t metallicRoughness = 0;
+		} texCoordSets;
 	};
 
 	/*
@@ -240,7 +258,19 @@ namespace vkglTF
 		BindImages = 0x00000001,
 		RenderOpaqueNodes = 0x00000002,
 		RenderAlphaMaskedNodes = 0x00000004,
-		RenderAlphaBlendedNodes = 0x00000008
+		RenderAlphaBlendedNodes = 0x00000008,
+		BindPBRMaterial = 0x00000010,
+	};
+
+	struct PushConstBlockMaterial {
+		glm::vec4 baseColorFactor;
+		int colorTextureSet;
+		int normalTextureSet;
+		int PhysicalDescriptorTextureSet;
+		float metallicFactor;
+		float roughnessFactor;
+		float alphaMask;
+		float alphaMaskCutoff;
 	};
 
 	/*
@@ -272,6 +302,7 @@ namespace vkglTF
 		std::vector<Skin*> skins;
 
 		std::vector<Texture> textures;
+		std::vector<TextureSampler> textureSamplers;
 		std::vector<Material> materials;
 		std::vector<Animation> animations;
 
@@ -291,7 +322,10 @@ namespace vkglTF
 		~Model();
 		void loadNode(vkglTF::Node* parent, const tinygltf::Node& node, uint32_t nodeIndex, const tinygltf::Model& model, std::vector<uint32_t>& indexBuffer, std::vector<Vertex>& vertexBuffer, float globalscale);
 		void loadSkins(tinygltf::Model& gltfModel);
-		void loadImages(tinygltf::Model& gltfModel, vks::VulkanDevice* device, VkQueue transferQueue);
+		void loadTextures(tinygltf::Model& gltfModel, vks::VulkanDevice* device, VkQueue transferQueue);
+		VkSamplerAddressMode getVkWrapMode(int32_t wrapMode);
+		VkFilter getVkFilterMode(int32_t filterMode);
+		void loadTextureSamplers(tinygltf::Model& gltfModel);
 		void loadMaterials(tinygltf::Model& gltfModel);
 		void loadAnimations(tinygltf::Model& gltfModel);
 		void loadFromFile(std::string filename, vks::VulkanDevice* device, VkQueue transferQueue, uint32_t fileLoadingFlags = vkglTF::FileLoadingFlags::None, float scale = 1.0f);
