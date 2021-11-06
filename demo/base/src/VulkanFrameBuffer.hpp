@@ -91,7 +91,7 @@ namespace vks
 	private:
 		vks::VulkanDevice *vulkanDevice;
 	public:
-		uint32_t width, height;
+		const uint32_t width, height;
 		VkFramebuffer framebuffer;
 		VkRenderPass renderPass;
 		VkSampler sampler;
@@ -102,7 +102,8 @@ namespace vks
 		*
 		* @param vulkanDevice Pointer to a valid VulkanDevice
 		*/
-		Framebuffer(vks::VulkanDevice *vulkanDevice)
+		Framebuffer(vks::VulkanDevice *vulkanDevice, uint32_t w, uint32_t h)
+			: width(w), height(h)
 		{
 			assert(vulkanDevice);
 			this->vulkanDevice = vulkanDevice;
@@ -134,6 +135,9 @@ namespace vks
 		*/
 		uint32_t addAttachment(vks::AttachmentCreateInfo createinfo)
 		{
+			assert(createinfo.width == width);
+			assert(createinfo.height == height);
+
 			vks::FramebufferAttachment attachment;
 
 			attachment.format = createinfo.format;
