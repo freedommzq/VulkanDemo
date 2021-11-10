@@ -290,22 +290,15 @@ public:
 	// light sources' point of view to the layers of the depth attachment in one single pass
 	void shadowSetup()
 	{
-		frameBuffers.shadow = new vks::Framebuffer(vulkanDevice);
-
-		frameBuffers.shadow->width = SHADOWMAP_DIM;
-		frameBuffers.shadow->height = SHADOWMAP_DIM;
+		frameBuffers.shadow = new vks::Framebuffer(vulkanDevice, SHADOWMAP_DIM, SHADOWMAP_DIM);
 
 		// Create a layered depth attachment for rendering the depth maps from the lights' point of view
 		// Each layer corresponds to one of the lights
 		// The actual output to the separate layers is done in the geometry shader using shader instancing
 		// We will pass the matrices of the lights to the GS that selects the layer by the current invocation
-		vks::AttachmentCreateInfo attachmentInfo = {};
-		attachmentInfo.format = SHADOWMAP_FORMAT;
-		attachmentInfo.width = SHADOWMAP_DIM;
-		attachmentInfo.height = SHADOWMAP_DIM;
-		attachmentInfo.layerCount = LIGHT_COUNT;
-		attachmentInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		frameBuffers.shadow->addAttachment(attachmentInfo);
+		frameBuffers.shadow->addAttachment(
+			{ SHADOWMAP_DIM, SHADOWMAP_DIM, LIGHT_COUNT, SHADOWMAP_FORMAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT}
+		);
 
 		// Create sampler to sample from to depth attachment
 		// Used to sample in the fragment shader for shadowed rendering
@@ -318,17 +311,11 @@ public:
 	// Prepare the framebuffer for geometry rendering with multiple attachments used as render targets inside the fragment shaders
 	void geometrySetup()
 	{
-		frameBuffers.geometry = new vks::Framebuffer(vulkanDevice);
-
-		frameBuffers.geometry->width = FB_DIM;
-		frameBuffers.geometry->height = FB_DIM;
+		frameBuffers.geometry = new vks::Framebuffer(vulkanDevice, FB_DIM, FB_DIM);
 
 		// Four attachments (3 color, 1 depth)
-		vks::AttachmentCreateInfo attachmentInfo = {};
-		attachmentInfo.width = FB_DIM;
-		attachmentInfo.height = FB_DIM;
-		attachmentInfo.layerCount = 1;
-		attachmentInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		vks::AttachmentCreateInfo attachmentInfo = 
+			{ FB_DIM, FB_DIM, 1, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT };
 
 		// Color attachments
 		// Attachment 0: (World space) Positions
@@ -362,18 +349,11 @@ public:
 
 	void ssaoSetup()
 	{
-		frameBuffers.ssao = new vks::Framebuffer(vulkanDevice);
+		frameBuffers.ssao = new vks::Framebuffer(vulkanDevice, SSAO_FB_DIM, SSAO_FB_DIM);
 
-		frameBuffers.ssao->width = SSAO_FB_DIM;
-		frameBuffers.ssao->height = SSAO_FB_DIM;
-
-		vks::AttachmentCreateInfo attachmentInfo = {};
-		attachmentInfo.width = SSAO_FB_DIM;
-		attachmentInfo.height = SSAO_FB_DIM;
-		attachmentInfo.layerCount = 1;
-		attachmentInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		attachmentInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-		frameBuffers.ssao->addAttachment(attachmentInfo);
+		frameBuffers.ssao->addAttachment(
+			{ SSAO_FB_DIM, SSAO_FB_DIM, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT }
+		);
 
 		// Create sampler to sample from the color attachments
 		VK_CHECK_RESULT(frameBuffers.ssao->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
@@ -384,18 +364,11 @@ public:
 
 	void ssaoBlurSetup()
 	{
-		frameBuffers.ssaoBlur = new vks::Framebuffer(vulkanDevice);
+		frameBuffers.ssaoBlur = new vks::Framebuffer(vulkanDevice, SSAO_FB_DIM, SSAO_FB_DIM);
 
-		frameBuffers.ssaoBlur->width = SSAO_FB_DIM;
-		frameBuffers.ssaoBlur->height = SSAO_FB_DIM;
-
-		vks::AttachmentCreateInfo attachmentInfo = {};
-		attachmentInfo.width = SSAO_FB_DIM;
-		attachmentInfo.height = SSAO_FB_DIM;
-		attachmentInfo.layerCount = 1;
-		attachmentInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		attachmentInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-		frameBuffers.ssaoBlur->addAttachment(attachmentInfo);
+		frameBuffers.ssaoBlur->addAttachment(
+			{ SSAO_FB_DIM, SSAO_FB_DIM, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT }
+		);
 
 		// Create sampler to sample from the color attachments
 		VK_CHECK_RESULT(frameBuffers.ssaoBlur->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
@@ -406,19 +379,11 @@ public:
 
 	void directLightingSetup()
 	{
-		frameBuffers.lighting = new vks::Framebuffer(vulkanDevice);
+		frameBuffers.lighting = new vks::Framebuffer(vulkanDevice, LIGHTING_FB_DIM, LIGHTING_FB_DIM);
 
-		frameBuffers.lighting->width = LIGHTING_FB_DIM;
-		frameBuffers.lighting->height = LIGHTING_FB_DIM;
-
-		// 1 color attachment (direct color)
-		vks::AttachmentCreateInfo attachmentInfo = {};
-		attachmentInfo.width = LIGHTING_FB_DIM;
-		attachmentInfo.height = LIGHTING_FB_DIM;
-		attachmentInfo.layerCount = 1;
-		attachmentInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		attachmentInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-		frameBuffers.lighting->addAttachment(attachmentInfo);
+		frameBuffers.lighting->addAttachment(
+			{ LIGHTING_FB_DIM, LIGHTING_FB_DIM, 1, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT }
+		);
 
 		// Create sampler to sample from the color attachments
 		VK_CHECK_RESULT(frameBuffers.lighting->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
@@ -429,19 +394,11 @@ public:
 
 	void ssrSetup()
 	{
-		frameBuffers.ssr = new vks::Framebuffer(vulkanDevice);
+		frameBuffers.ssr = new vks::Framebuffer(vulkanDevice, SSR_FB_DIM, SSR_FB_DIM);
 
-		frameBuffers.ssr->width = SSR_FB_DIM;
-		frameBuffers.ssr->height = SSR_FB_DIM;
-
-		// 1 color attachment (reflect color)
-		vks::AttachmentCreateInfo attachmentInfo = {};
-		attachmentInfo.width = SSR_FB_DIM;
-		attachmentInfo.height = SSR_FB_DIM;
-		attachmentInfo.layerCount = 1;
-		attachmentInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		attachmentInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-		frameBuffers.ssr->addAttachment(attachmentInfo);
+		frameBuffers.ssr->addAttachment(
+			{ SSR_FB_DIM, SSR_FB_DIM, 1, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT }
+		);
 
 		// Create sampler to sample from the color attachments
 		VK_CHECK_RESULT(frameBuffers.ssr->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));

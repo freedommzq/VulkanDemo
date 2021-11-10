@@ -28,6 +28,7 @@ namespace vks
 		VkFormat format;
 		VkImageSubresourceRange subresourceRange;
 		VkAttachmentDescription description;
+		bool weakRef = false;
 
 		/**
 		* @brief Returns true if the attachment has a depth component
@@ -91,7 +92,7 @@ namespace vks
 	private:
 		vks::VulkanDevice *vulkanDevice;
 	public:
-		const uint32_t width, height;
+		uint32_t width, height;
 		VkFramebuffer framebuffer;
 		VkRenderPass renderPass;
 		VkSampler sampler;
@@ -117,12 +118,32 @@ namespace vks
 			assert(vulkanDevice);
 			for (auto attachment : attachments)
 			{
-				vkDestroyImage(vulkanDevice->logicalDevice, attachment.image, nullptr);
-				vkDestroyImageView(vulkanDevice->logicalDevice, attachment.view, nullptr);
-				vkFreeMemory(vulkanDevice->logicalDevice, attachment.memory, nullptr);
+				if (!attachment.weakRef) {
+					vkDestroyImage(vulkanDevice->logicalDevice, attachment.image, nullptr);
+					vkDestroyImageView(vulkanDevice->logicalDevice, attachment.view, nullptr);
+					vkFreeMemory(vulkanDevice->logicalDevice, attachment.memory, nullptr);
+				}
 			}
 			vkDestroySampler(vulkanDevice->logicalDevice, sampler, nullptr);
 			vkDestroyRenderPass(vulkanDevice->logicalDevice, renderPass, nullptr);
+			vkDestroyFramebuffer(vulkanDevice->logicalDevice, framebuffer, nullptr);
+		}
+
+		void clearBeforeRecreate(uint32_t w, uint32_t h) {
+			assert(vulkanDevice);
+
+			width = w;
+			height = h;
+
+			for (auto attachment : attachments)
+			{
+				if (!attachment.weakRef) {
+					vkDestroyImage(vulkanDevice->logicalDevice, attachment.image, nullptr);
+					vkDestroyImageView(vulkanDevice->logicalDevice, attachment.view, nullptr);
+					vkFreeMemory(vulkanDevice->logicalDevice, attachment.memory, nullptr);
+				}
+			}
+			attachments.clear();
 			vkDestroyFramebuffer(vulkanDevice->logicalDevice, framebuffer, nullptr);
 		}
 
@@ -229,6 +250,10 @@ namespace vks
 			return static_cast<uint32_t>(attachments.size() - 1);
 		}
 
+		uint32_t addAttachment(VkFormat format, VkImageUsageFlags usage, uint32_t layerCount = 1, VkSampleCountFlagBits imageSampleCount = VK_SAMPLE_COUNT_1_BIT) {
+			return addAttachment({ width, height, layerCount, format, usage, imageSampleCount });
+		}
+
 		/**
 		* Creates a default sampler for sampling from any of the framebuffer attachments
 		* Applications are free to create their own samplers for different use cases 
@@ -254,6 +279,34 @@ namespace vks
 			samplerInfo.maxLod = 1.0f;
 			samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
 			return vkCreateSampler(vulkanDevice->logicalDevice, &samplerInfo, nullptr, &sampler);
+		}
+
+		void createFrameBuffer() {
+			std::vector<VkImageView> attachmentViews;
+			for (auto attachment : attachments)
+			{
+				attachmentViews.push_back(attachment.view);
+			}
+
+			// Find. max number of layers across attachments
+			uint32_t maxLayers = 0;
+			for (auto attachment : attachments)
+			{
+				if (attachment.subresourceRange.layerCount > maxLayers)
+				{
+					maxLayers = attachment.subresourceRange.layerCount;
+				}
+			}
+
+			VkFramebufferCreateInfo framebufferInfo = {};
+			framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+			framebufferInfo.renderPass = renderPass;
+			framebufferInfo.pAttachments = attachmentViews.data();
+			framebufferInfo.attachmentCount = static_cast<uint32_t>(attachmentViews.size());
+			framebufferInfo.width = width;
+			framebufferInfo.height = height;
+			framebufferInfo.layers = maxLayers;
+			VK_CHECK_RESULT(vkCreateFramebuffer(vulkanDevice->logicalDevice, &framebufferInfo, nullptr, &framebuffer));
 		}
 
 		/**
@@ -338,31 +391,7 @@ namespace vks
 			renderPassInfo.pDependencies = dependencies.data();
 			VK_CHECK_RESULT(vkCreateRenderPass(vulkanDevice->logicalDevice, &renderPassInfo, nullptr, &renderPass));
 
-			std::vector<VkImageView> attachmentViews;
-			for (auto attachment : attachments)
-			{
-				attachmentViews.push_back(attachment.view);
-			}
-
-			// Find. max number of layers across attachments
-			uint32_t maxLayers = 0;
-			for (auto attachment : attachments)
-			{
-				if (attachment.subresourceRange.layerCount > maxLayers)
-				{
-					maxLayers = attachment.subresourceRange.layerCount;
-				}
-			}
-
-			VkFramebufferCreateInfo framebufferInfo = {};
-			framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-			framebufferInfo.renderPass = renderPass;
-			framebufferInfo.pAttachments = attachmentViews.data();
-			framebufferInfo.attachmentCount = static_cast<uint32_t>(attachmentViews.size());
-			framebufferInfo.width = width;
-			framebufferInfo.height = height;
-			framebufferInfo.layers = maxLayers;
-			VK_CHECK_RESULT(vkCreateFramebuffer(vulkanDevice->logicalDevice, &framebufferInfo, nullptr, &framebuffer));
+			createFrameBuffer();
 
 			return VK_SUCCESS;
 		}
