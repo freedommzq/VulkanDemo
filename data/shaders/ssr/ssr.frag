@@ -30,7 +30,8 @@ void main()
 	// View space
 	vec4 N = texture(samplerNormal, inUV);
 	vec3 normal = N.xyz;
-	float depth = texture(samplerDepth, inUV).x;
+	//float depth = texture(samplerDepth, inUV).x;
+	float depth = textureLod(samplerDepth, inUV, 0).x;
 
 	if(N.w != 1.0){
 		outFragcolor = vec4(reflectColor, 1.0);

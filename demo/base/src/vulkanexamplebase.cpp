@@ -2622,6 +2622,8 @@ void VulkanExampleBase::windowResize()
 	}
 	setupFrameBuffer();
 
+	windowResized();
+
 	if ((width > 0.0f) && (height > 0.0f)) {
 		if (settings.overlay) {
 			UIOverlay.resize(width, height);
@@ -2641,7 +2643,6 @@ void VulkanExampleBase::windowResize()
 	}
 
 	// Notify derived class
-	windowResized();
 	viewChanged();
 
 	prepared = true;

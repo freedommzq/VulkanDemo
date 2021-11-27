@@ -6,4 +6,5 @@ C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V ssr.vert -o spirv\ssr.vert.sp
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V ssr.frag -o spirv\ssr.frag.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V composition.vert -o spirv\composition.vert.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V composition.frag -o spirv\composition.frag.spv
+C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V downsamplerCS.comp -o spirv\downsamplerCS.comp.spv
 pause

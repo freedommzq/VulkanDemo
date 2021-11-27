@@ -8,14 +8,15 @@
 
 #include "vulkanexamplebase.h"
 #include "VulkanglTFModel.h"
+#include "VulkanFrameBuffer.hpp"
+
+#include "DepthHierarchy.h"
 
 #define ENABLE_VALIDATION true
 
 class VulkanExample : public VulkanExampleBase
 {
 public:
-	bool descriptorNeedRewrite = false;
-
 	struct {
 		struct {
 			vks::Texture2D colorMap;
@@ -42,6 +43,10 @@ public:
 		vks::Buffer vertices;
 		vks::Buffer indices;
 		uint32_t indexCount;
+		void destroy() {
+			vertices.destroy();
+			indices.destroy();
+		}
 	}screenQuad;
 
 	struct {
@@ -84,7 +89,9 @@ public:
 	} uniformBuffers;
 
 	VkDescriptorSetLayout descriptorSetLayout;
+	VkDescriptorSetLayout dsLayoutDownsampleCS;
 	VkPipelineLayout pipelineLayout;
+	VkPipelineLayout ppLayoutDownsampleCS;
 
 	VkDescriptorSet dsPrez;
 	struct {
@@ -99,28 +106,22 @@ public:
 		VkPipeline lighting;
 		VkPipeline ssr;
 		VkPipeline composition;
+		VkPipeline downsampleCS;
 	} pipelines;
 
-	// Framebuffer for offscreen rendering
-	struct FrameBufferAttachment {
-		void destroy(VkDevice device) {
-			if (image != VK_NULL_HANDLE) {
-				vkDestroyImageView(device, view, nullptr);
-				vkDestroyImage(device, image, nullptr);
-				vkFreeMemory(device, mem, nullptr);
-			}
-		}
+	struct {
+		std::unique_ptr<vks::Framebuffer> prez;
+		std::unique_ptr<vks::Framebuffer> lighting;
+		std::unique_ptr<vks::Framebuffer> ssr;
+	}passes;
 
-		VkImage image = VK_NULL_HANDLE;
-		VkDeviceMemory mem;
-		VkImageView view;
-		VkFormat format;
+	struct cbDownsample {
+		float outputSize[2];
+		float invInputSize[2];
+		uint32_t slice;
+		uint32_t padding[3];
 	};
-	FrameBufferAttachment normalFBA; // thin-gBuffer
-	FrameBufferAttachment directColorFBA;
-	FrameBufferAttachment reflectColorFBA;
-
-	VkSampler colorSampler;
+	DepthHierarchy depthHierarchy;
 
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	{
@@ -136,25 +137,20 @@ public:
 		camera.setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
 		camera.setPerspective(60.0f, (float)width / (float)height, 0.1f, 256.0f);
 		settings.overlay = true;
-		UIOverlay.subpass = 3;
 	}
 
 	~VulkanExample()
 	{
-		vkDestroySampler(device, colorSampler, nullptr);
-
-		// Framebuffer attachments
-		normalFBA.destroy(device);
-		directColorFBA.destroy(device);
-		reflectColorFBA.destroy(device);
-
 		vkDestroyPipeline(device, pipelines.prez, nullptr);
 		vkDestroyPipeline(device, pipelines.lighting, nullptr);
 		vkDestroyPipeline(device, pipelines.ssr, nullptr);
 		vkDestroyPipeline(device, pipelines.composition, nullptr);
+		vkDestroyPipeline(device, pipelines.downsampleCS, nullptr);
 
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+		vkDestroyPipelineLayout(device, ppLayoutDownsampleCS, nullptr);
 		vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+		vkDestroyDescriptorSetLayout(device, dsLayoutDownsampleCS, nullptr);
 
 		// Uniform buffers
 		uniformBuffers.vs.destroy();
@@ -166,6 +162,9 @@ public:
 		textures.model.normalMap.destroy();
 		textures.floor.colorMap.destroy();
 		textures.floor.normalMap.destroy();
+
+		screenQuad.destroy();
+		depthHierarchy.destroy(device);
 	}
 
 	// Enable physical device features required for this example
@@ -177,101 +176,60 @@ public:
 		}
 	};
 
-	// Create a frame buffer attachment
-	void createAttachment(VkFormat format, VkImageUsageFlags usage, uint32_t width, uint32_t height, FrameBufferAttachment *attachment) {
-		VkImageAspectFlags aspectMask = 0;
+	void graphicsPassPrepare() {
+		// prez pass
+		//
+		passes.prez = std::make_unique<vks::Framebuffer>(vulkanDevice, width, height);
 
-		attachment->format = format;
+		vks::FramebufferAttachment depth;
+		depth.image = depthStencil.image;
+		depth.memory = depthStencil.mem;
+		depth.view = depthStencil.view;
+		depth.format = depthFormat;
+		depth.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+		depth.description = {
+			0,
+			depth.format,
+			VK_SAMPLE_COUNT_1_BIT,
+			VK_ATTACHMENT_LOAD_OP_CLEAR,
+			VK_ATTACHMENT_STORE_OP_STORE,
+			VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+			VK_ATTACHMENT_STORE_OP_DONT_CARE,
+			VK_IMAGE_LAYOUT_UNDEFINED,
+			VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+		};
+		depth.weakRef = true;
+		passes.prez->attachments.push_back(depth);
 
-		if (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-		{
-			aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		}
-		if (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
-		{
-			aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-		}
+		VK_CHECK_RESULT(passes.prez->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+		VK_CHECK_RESULT(passes.prez->createRenderPass());
 
-		assert(aspectMask > 0);
+		// lighting pass
+		//
+		passes.lighting = std::make_unique<vks::Framebuffer>(vulkanDevice, width, height);
 
-		if (attachment->image != VK_NULL_HANDLE) {
-			vkDestroyImageView(device, attachment->view, nullptr);
-			vkDestroyImage(device, attachment->image, nullptr);
-			vkFreeMemory(device, attachment->mem, nullptr);
-			descriptorNeedRewrite = true;
-		}
+		// Normal
+		passes.lighting->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		// Color
+		passes.lighting->addAttachment(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
 
-		VkImageCreateInfo image = vks::initializers::imageCreateInfo();
-		image.imageType = VK_IMAGE_TYPE_2D;
-		image.format = format;
-		image.extent.width = width;
-		image.extent.height = height;
-		image.extent.depth = 1;
-		image.mipLevels = 1;
-		image.arrayLayers = 1;
-		image.samples = VK_SAMPLE_COUNT_1_BIT;
-		image.tiling = VK_IMAGE_TILING_OPTIMAL;
-		image.usage = usage;
+		depth.description.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+		depth.description.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+		depth.description.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		passes.lighting->attachments.push_back(depth);
 
-		VkMemoryAllocateInfo memAlloc = vks::initializers::memoryAllocateInfo();
-		VkMemoryRequirements memReqs;
+		VK_CHECK_RESULT(passes.lighting->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+		VK_CHECK_RESULT(passes.lighting->createRenderPass());
 
-		VK_CHECK_RESULT(vkCreateImage(device, &image, nullptr, &attachment->image));
-		vkGetImageMemoryRequirements(device, attachment->image, &memReqs);
-		memAlloc.allocationSize = memReqs.size;
-		memAlloc.memoryTypeIndex = vulkanDevice->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		VK_CHECK_RESULT(vkAllocateMemory(device, &memAlloc, nullptr, &attachment->mem));
-		VK_CHECK_RESULT(vkBindImageMemory(device, attachment->image, attachment->mem, 0));
+		// ssr pass
+		//
+		passes.ssr = std::make_unique<vks::Framebuffer>(vulkanDevice, width, height);
 
-		VkImageViewCreateInfo imageView = vks::initializers::imageViewCreateInfo();
-		imageView.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		imageView.format = format;
-		imageView.subresourceRange = {};
-		imageView.subresourceRange.aspectMask = aspectMask;
-		imageView.subresourceRange.baseMipLevel = 0;
-		imageView.subresourceRange.levelCount = 1;
-		imageView.subresourceRange.baseArrayLayer = 0;
-		imageView.subresourceRange.layerCount = 1;
-		imageView.image = attachment->image;
-		VK_CHECK_RESULT(vkCreateImageView(device, &imageView, nullptr, &attachment->view));
-	}
+		// Reflect Color
+		passes.ssr->addAttachment(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
 
-	void setupFBAs() {
-		createAttachment(
-			VK_FORMAT_R16G16B16A16_SFLOAT,
-			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-			width, height,
-			&normalFBA
-		);
-
-		createAttachment(
-			VK_FORMAT_R8G8B8A8_UNORM,
-			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-			width, height,
-			&directColorFBA
-		);
-
-		createAttachment(
-			VK_FORMAT_R8G8B8A8_UNORM,
-			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-			width, height,
-			&reflectColorFBA
-		);
-
-		// Create sampler to sample from the color attachments
-		VkSamplerCreateInfo sampler = vks::initializers::samplerCreateInfo();
-		sampler.magFilter = VK_FILTER_NEAREST;
-		sampler.minFilter = VK_FILTER_NEAREST;
-		sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-		sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-		sampler.addressModeV = sampler.addressModeU;
-		sampler.addressModeW = sampler.addressModeU;
-		sampler.mipLodBias = 0.0f;
-		sampler.maxAnisotropy = 1.0f;
-		sampler.minLod = 0.0f;
-		sampler.maxLod = 1.0f;
-		sampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
-		VK_CHECK_RESULT(vkCreateSampler(device, &sampler, nullptr, &colorSampler));
+		VK_CHECK_RESULT(passes.ssr->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+		VK_CHECK_RESULT(passes.ssr->createRenderPass());
 	}
 
 	virtual void setupDepthStencil() override {
@@ -284,7 +242,7 @@ public:
 		imageCI.arrayLayers = 1;
 		imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
 		imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
-		imageCI.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		imageCI.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 
 		VK_CHECK_RESULT(vkCreateImage(device, &imageCI, nullptr, &depthStencil.image));
 		VkMemoryRequirements memReqs{};
@@ -307,172 +265,59 @@ public:
 		imageViewCI.subresourceRange.baseArrayLayer = 0;
 		imageViewCI.subresourceRange.layerCount = 1;
 		imageViewCI.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-		// Stencil aspect should only be set on depth + stencil formats (VK_FORMAT_D16_UNORM_S8_UINT..VK_FORMAT_D32_SFLOAT_S8_UINT
-		/*
-		if (depthFormat >= VK_FORMAT_D16_UNORM_S8_UINT) {
-			imageViewCI.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
-		}
-		*/
 		VK_CHECK_RESULT(vkCreateImageView(device, &imageViewCI, nullptr, &depthStencil.view));
-
-		setupFBAs();
 	}
 
 	virtual void setupRenderPass() override {
-		std::array<VkAttachmentDescription, 5> attachments = {};
+		VkAttachmentDescription attachment = {};
 		// swap chain image
-		attachments[0].format = swapChain.colorFormat;
-		attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-		// normal target
-		attachments[1].format = normalFBA.format;
-		attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-		attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		attachments[1].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		// direct lighting result
-		attachments[2].format = directColorFBA.format;
-		attachments[2].samples = VK_SAMPLE_COUNT_1_BIT;
-		attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		attachments[2].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		// reflect color
-		attachments[3].format = reflectColorFBA.format;
-		attachments[3].samples = VK_SAMPLE_COUNT_1_BIT;
-		attachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		attachments[3].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[3].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		attachments[3].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[3].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		attachments[3].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		// depth attachment
-		attachments[4].format = depthFormat;
-		attachments[4].samples = VK_SAMPLE_COUNT_1_BIT;
-		attachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		attachments[4].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[4].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		attachments[4].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[4].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		attachments[4].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-		// pre-z subpass
-		VkAttachmentReference prezDepthRef = { 4, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-
-		// direct lighting subpass
-		std::array<VkAttachmentReference, 2> lightColorRefs = { {
-			{ 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
-			{ 2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL }
-		} };
-		VkAttachmentReference lightDepthRef = { 4, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-
-		// ssr subpass
-		VkAttachmentReference ssrColorRef = { 3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-		std::array<VkAttachmentReference, 3> ssrInputRefs = { {
-			{ 1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-			{ 4, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-			{ 2, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }
-		} };
+		attachment.format = swapChain.colorFormat;
+		attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
 		// composition subpass
-		VkAttachmentReference compColorRef = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-		std::array<VkAttachmentReference, 2> compInputRefs = { {
-			{ 2, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-			{ 3, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }
-		} };
+		VkAttachmentReference colorRef = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
 
-		std::array<VkSubpassDescription, 4> subpassDescriptions = {};
-		subpassDescriptions[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpassDescriptions[0].colorAttachmentCount = 0;
-		subpassDescriptions[0].pColorAttachments = nullptr;
-		subpassDescriptions[0].pDepthStencilAttachment = &prezDepthRef;
-		subpassDescriptions[0].inputAttachmentCount = 0;
-		subpassDescriptions[0].pInputAttachments = nullptr;
-		subpassDescriptions[0].preserveAttachmentCount = 0;
-		subpassDescriptions[0].pPreserveAttachments = nullptr;
-		subpassDescriptions[0].pResolveAttachments = nullptr;
+		VkSubpassDescription subpassDescription = {};
+		subpassDescription.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpassDescription.colorAttachmentCount = 1;
+		subpassDescription.pColorAttachments = &colorRef;
+		subpassDescription.pDepthStencilAttachment = nullptr;
+		subpassDescription.inputAttachmentCount = 0;
+		subpassDescription.pInputAttachments = nullptr;
+		subpassDescription.preserveAttachmentCount = 0;
+		subpassDescription.pPreserveAttachments = nullptr;
+		subpassDescription.pResolveAttachments = nullptr;
 
-		subpassDescriptions[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpassDescriptions[1].colorAttachmentCount = static_cast<uint32_t>(lightColorRefs.size());
-		subpassDescriptions[1].pColorAttachments = lightColorRefs.data();
-		subpassDescriptions[1].pDepthStencilAttachment = &lightDepthRef;
-		subpassDescriptions[1].inputAttachmentCount = 0;
-		subpassDescriptions[1].pInputAttachments = nullptr;
-		subpassDescriptions[1].preserveAttachmentCount = 0;
-		subpassDescriptions[1].pPreserveAttachments = nullptr;
-		subpassDescriptions[1].pResolveAttachments = nullptr;
-
-		subpassDescriptions[2].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpassDescriptions[2].colorAttachmentCount = 1;
-		subpassDescriptions[2].pColorAttachments = &ssrColorRef;
-		subpassDescriptions[2].pDepthStencilAttachment = nullptr;
-		subpassDescriptions[2].inputAttachmentCount = static_cast<uint32_t>(ssrInputRefs.size());
-		subpassDescriptions[2].pInputAttachments = ssrInputRefs.data();
-		subpassDescriptions[2].preserveAttachmentCount = 0;
-		subpassDescriptions[2].pPreserveAttachments = nullptr;
-		subpassDescriptions[2].pResolveAttachments = nullptr;
-
-		subpassDescriptions[3].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpassDescriptions[3].colorAttachmentCount = 1;
-		subpassDescriptions[3].pColorAttachments = &compColorRef;
-		subpassDescriptions[3].pDepthStencilAttachment = nullptr;
-		subpassDescriptions[3].inputAttachmentCount = static_cast<uint32_t>(compInputRefs.size());
-		subpassDescriptions[3].pInputAttachments = compInputRefs.data();
-		subpassDescriptions[3].preserveAttachmentCount = 0;
-		subpassDescriptions[3].pPreserveAttachments = nullptr;
-		subpassDescriptions[3].pResolveAttachments = nullptr;
-
-		// Subpass dependencies for layout transitions
-		std::array<VkSubpassDependency, 4> dependencies;
+		std::array<VkSubpassDependency, 2> dependencies;
 
 		dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-		dependencies[0].dstSubpass = 3;
-		dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[0].dstSubpass = 0;
+		dependencies[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
 		dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 		dependencies[0].srcAccessMask = 0;
 		dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		dependencies[0].dependencyFlags = 0;
+		dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
 		dependencies[1].srcSubpass = 0;
-		dependencies[1].dstSubpass = 1;
-		dependencies[1].srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-		dependencies[1].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-		dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-		dependencies[1].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+		dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+		dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+		dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		dependencies[1].dstAccessMask = 0;
 		dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-		dependencies[2].srcSubpass = 1;
-		dependencies[2].dstSubpass = 2;
-		dependencies[2].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		dependencies[2].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		dependencies[2].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		dependencies[2].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-		dependencies[2].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-		dependencies[3].srcSubpass = 2;
-		dependencies[3].dstSubpass = 3;
-		dependencies[3].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		dependencies[3].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		dependencies[3].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		dependencies[3].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-		dependencies[3].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
 		VkRenderPassCreateInfo renderPassInfo = {};
 		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-		renderPassInfo.pAttachments = attachments.data();
-		renderPassInfo.subpassCount = static_cast<uint32_t>(subpassDescriptions.size());
-		renderPassInfo.pSubpasses = subpassDescriptions.data();
+		renderPassInfo.attachmentCount = 1;
+		renderPassInfo.pAttachments = &attachment;
+		renderPassInfo.subpassCount = 1;
+		renderPassInfo.pSubpasses = &subpassDescription;
 		renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
 		renderPassInfo.pDependencies = dependencies.data();
 
@@ -480,62 +325,21 @@ public:
 	}
 
 	virtual void setupFrameBuffer() override {
-		if (descriptorNeedRewrite) {
-
-			std::vector<VkWriteDescriptorSet> writeDescriptorSets;		
-			/*
-				SSR subpass
-			*/
-			VkDescriptorImageInfo descriptorNormal = { colorSampler, normalFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-			VkDescriptorImageInfo descriptorDepth = { colorSampler, depthStencil.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-			VkDescriptorImageInfo descriptorDirect = { colorSampler, directColorFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-
-			writeDescriptorSets = {
-				// Binding 1: Normal buffer
-				vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &descriptorNormal),
-				// Binding 2: Depth buffer
-				vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &descriptorDepth),
-				// Binding 3: Direct lighting buffer
-				vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &descriptorDirect),
-			};
-			vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
-
-			/*
-				Composition subpass
-			*/
-			VkDescriptorImageInfo descriptorReflect = { colorSampler, reflectColorFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-
-			writeDescriptorSets = {
-				// Binding 1: Direct lighting buffer
-				vks::initializers::writeDescriptorSet(dsComposition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &descriptorDirect),
-				// Binding 2: Reflect color buffer
-				vks::initializers::writeDescriptorSet(dsComposition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &descriptorReflect),
-			};
-			vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
-
-			descriptorNeedRewrite = false;
-		}
-
-		std::array<VkImageView, 5> attachments;
-		attachments[1] = normalFBA.view;
-		attachments[2] = directColorFBA.view;
-		attachments[3] = reflectColorFBA.view;
-		attachments[4] = depthStencil.view;
+		VkImageView attachment;
 
 		VkFramebufferCreateInfo frameBufferCreateInfo = {};
 		frameBufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 		frameBufferCreateInfo.renderPass = renderPass;
-		frameBufferCreateInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-		frameBufferCreateInfo.pAttachments = attachments.data();
+		frameBufferCreateInfo.attachmentCount = 1;
+		frameBufferCreateInfo.pAttachments = &attachment;
 		frameBufferCreateInfo.width = width;
 		frameBufferCreateInfo.height = height;
 		frameBufferCreateInfo.layers = 1;
 
-		// Create frame buffers for every swap chain image
 		frameBuffers.resize(swapChain.imageCount);
 		for (uint32_t i = 0; i < frameBuffers.size(); i++)
 		{
-			attachments[0] = swapChain.buffers[i].view;
+			attachment = swapChain.buffers[i].view;
 			VK_CHECK_RESULT(vkCreateFramebuffer(device, &frameBufferCreateInfo, nullptr, &frameBuffers[i]));
 		}
 	}
@@ -733,6 +537,42 @@ public:
 		// Shared pipeline layout used by all pipelines
 		VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&descriptorSetLayout, 1);
 		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, nullptr, &pipelineLayout));
+
+		// downsampler compute pipeline
+		// create the descriptor set layout
+		// the shader needs
+		// source image: texture + sampler
+		// destination image: storage image
+		// single pass: destination images count # of mips
+		// single pass: global atomic counter, storage buffer
+		{
+			std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+				// Binding 0 : 
+				vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 0),
+				// Binding 1 : 
+				vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_SAMPLER, VK_SHADER_STAGE_COMPUTE_BIT, 1),
+				// Binding 2 : 
+				vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 2)
+			};
+			VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+			VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &dsLayoutDownsampleCS));
+
+			VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo = {};
+			pPipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+
+			// push constants: input size, inverse output size
+			VkPushConstantRange pushConstantRange = {};
+			pushConstantRange.offset = 0;
+			pushConstantRange.size = sizeof(cbDownsample);
+			pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+			pPipelineLayoutCreateInfo.pushConstantRangeCount = 1;
+			pPipelineLayoutCreateInfo.pPushConstantRanges = &pushConstantRange;
+
+			pPipelineLayoutCreateInfo.setLayoutCount = 1;
+			pPipelineLayoutCreateInfo.pSetLayouts = &dsLayoutDownsampleCS;
+
+			VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, NULL, &ppLayoutDownsampleCS));
+		}
 	}
 
 	void preparePipelines()
@@ -748,7 +588,7 @@ public:
 		VkPipelineDynamicStateCreateInfo dynamicState = vks::initializers::pipelineDynamicStateCreateInfo(dynamicStateEnables);
 		std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages;
 
-		VkGraphicsPipelineCreateInfo pipelineCI = vks::initializers::pipelineCreateInfo(pipelineLayout, renderPass);
+		VkGraphicsPipelineCreateInfo pipelineCI = vks::initializers::pipelineCreateInfo();
 		pipelineCI.pInputAssemblyState = &inputAssemblyState;
 		pipelineCI.pRasterizationState = &rasterizationState;
 		pipelineCI.pColorBlendState = &colorBlendState;
@@ -759,8 +599,12 @@ public:
 		pipelineCI.stageCount = static_cast<uint32_t>(shaderStages.size());
 		pipelineCI.pStages = shaderStages.data();
 
-		// prez subpass pipeline
+		pipelineCI.layout = pipelineLayout;
 		pipelineCI.subpass = 0;
+
+		// prez pass
+		//
+		pipelineCI.renderPass = passes.prez->renderPass;
 		pipelineCI.pVertexInputState = vkglTF::Vertex::getPipelineVertexInputState({ vkglTF::VertexComponent::Position });
 
 		shaderStages[0] = loadShader(getShadersPath() + "ssr/spirv/prez.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
@@ -768,8 +612,9 @@ public:
 
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.prez));
 
-		// direct lighting subpass pipeline
-		pipelineCI.subpass = 1;
+		// direct lighting pass
+		//
+		pipelineCI.renderPass = passes.lighting->renderPass;
 		pipelineCI.pVertexInputState = vkglTF::Vertex::getPipelineVertexInputState({
 			vkglTF::VertexComponent::Position,
 			vkglTF::VertexComponent::UV,
@@ -790,9 +635,9 @@ public:
 
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.lighting));
 
-		// ssr subpass pipeline
-		pipelineCI.subpass = 2;
-
+		// ssr pass
+		//
+		pipelineCI.renderPass = passes.ssr->renderPass;
 		VkPipelineVertexInputStateCreateInfo inputState = vks::initializers::pipelineVertexInputStateCreateInfo();
 		// Binding description
 		std::vector<VkVertexInputBindingDescription> bindingDescriptions = {
@@ -818,8 +663,9 @@ public:
 
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.ssr));
 
-		// composition subpass pipeline
-		pipelineCI.subpass = 3;
+		// composition pass
+		//
+		pipelineCI.renderPass = renderPass;
 		VkPipelineVertexInputStateCreateInfo emptyInputState = vks::initializers::pipelineVertexInputStateCreateInfo();
 		pipelineCI.pVertexInputState = &emptyInputState;
 		rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT;
@@ -827,16 +673,34 @@ public:
 		shaderStages[1] = loadShader(getShadersPath() + "ssr/spirv/composition.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.composition));
+
+		// compute pipeline
+		// downsampler pipeline
+		{
+			VkPipelineShaderStageCreateInfo shader = loadShader(getShadersPath() + "ssr/spirv/downsamplerCS.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+
+			VkComputePipelineCreateInfo pipeline = {};
+			pipeline.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+			pipeline.layout = ppLayoutDownsampleCS;
+			pipeline.stage = shader;
+			pipeline.basePipelineHandle = VK_NULL_HANDLE;
+			pipeline.basePipelineIndex = 0;
+
+			VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipeline, NULL, &pipelines.downsampleCS));
+		}
 	}
 
 	void setupDescriptorPool()
 	{
 		std::vector<VkDescriptorPoolSize> poolSizes = {
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 7),
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8)
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, DepthHierarchy::MAX_MIP_LEVEL),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_SAMPLER, DepthHierarchy::MAX_MIP_LEVEL),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, DepthHierarchy::MAX_MIP_LEVEL)
 		};
 
-		VkDescriptorPoolCreateInfo descriptorPoolInfo = vks::initializers::descriptorPoolCreateInfo(poolSizes, 5);
+		VkDescriptorPoolCreateInfo descriptorPoolInfo = vks::initializers::descriptorPoolCreateInfo(poolSizes, 5 + DepthHierarchy::MAX_MIP_LEVEL);
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 	}
 
@@ -846,7 +710,7 @@ public:
 		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayout, 1);
 
 		/*
-			Pre-z subpass
+			Pre-z pass
 		*/
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsPrez));
 		writeDescriptorSets = {
@@ -856,7 +720,7 @@ public:
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 
 		/*
-			Direct lighting subpass
+			Direct lighting pass
 		*/
 		// Model
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsLighting.model));
@@ -887,11 +751,11 @@ public:
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 
 		/*
-			SSR subpass
+			SSR pass
 		*/
-		VkDescriptorImageInfo descriptorNormal = { colorSampler, normalFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-		VkDescriptorImageInfo descriptorDepth = { colorSampler, depthStencil.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-		VkDescriptorImageInfo descriptorDirect = { colorSampler, directColorFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorImageInfo descriptorNormal = { passes.lighting->sampler, passes.lighting->attachments[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorImageInfo descriptorDepth = { passes.prez->sampler, depthHierarchy.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorImageInfo descriptorDirect = { passes.lighting->sampler, passes.lighting->attachments[1].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsSsr));
 		writeDescriptorSets = {
@@ -907,9 +771,9 @@ public:
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 
 		/*
-			Composition subpass
+			Composition pass
 		*/
-		VkDescriptorImageInfo descriptorReflect = { colorSampler, reflectColorFBA.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorImageInfo descriptorReflect = { passes.ssr->sampler, passes.ssr->attachments[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dsComposition));
 		writeDescriptorSets = {
@@ -921,46 +785,66 @@ public:
 			vks::initializers::writeDescriptorSet(dsComposition, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.composition.descriptor)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
+
+		/*
+			Downsample pass
+		*/
+		{
+			allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &dsLayoutDownsampleCS, 1);
+			assert(depthHierarchy.mipLevel != -1);
+			for (int i = 0; i < depthHierarchy.mipLevel; ++i) {
+				VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &depthHierarchy.descriptorSets[i]));
+
+				VkDescriptorImageInfo descriptorSrc = { VK_NULL_HANDLE, i == 0 ? depthStencil.view : depthHierarchy.splitViews[i - 1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+				VkDescriptorImageInfo descriptorSampler;
+				descriptorSampler.sampler = depthHierarchy.sampler;
+				VkDescriptorImageInfo descriptorDst = { VK_NULL_HANDLE, depthHierarchy.splitViews[i], VK_IMAGE_LAYOUT_GENERAL };
+
+				writeDescriptorSets = {
+					vks::initializers::writeDescriptorSet(depthHierarchy.descriptorSets[i], VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 0, &descriptorSrc),
+					vks::initializers::writeDescriptorSet(depthHierarchy.descriptorSets[i], VK_DESCRIPTOR_TYPE_SAMPLER, 1, &descriptorSampler),
+					vks::initializers::writeDescriptorSet(depthHierarchy.descriptorSets[i], VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2, &descriptorDst)
+				};
+				vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
+			}
+		}
 	}
 
 	void buildCommandBuffers()
 	{
 		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
 
-		std::array<VkClearValue, 5> clearValues;
-		clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-		clearValues[1].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-		clearValues[2].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-		clearValues[3].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-		clearValues[4].depthStencil = { 1.0f, 0 };
+		std::array<VkClearValue, 3> clearValues;
 
 		VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
-		renderPassBeginInfo.renderPass = renderPass;
 		renderPassBeginInfo.renderArea.offset.x = 0;
 		renderPassBeginInfo.renderArea.offset.y = 0;
 		renderPassBeginInfo.renderArea.extent.width = width;
-		renderPassBeginInfo.renderArea.extent.height = height;
-		renderPassBeginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+		renderPassBeginInfo.renderArea.extent.height = height;	
 		renderPassBeginInfo.pClearValues = clearValues.data();
 
 		for (int32_t i = 0; i < drawCmdBuffers.size(); ++i)
 		{
-			renderPassBeginInfo.framebuffer = frameBuffers[i];
-
 			VK_CHECK_RESULT(vkBeginCommandBuffer(drawCmdBuffers[i], &cmdBufInfo));
 
-			vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-			VkViewport viewport = vks::initializers::viewport((float)width, (float)height, 0.0f, 1.0f);
-			vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
-
-			VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
-			vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
-
 			/*
-				subpass 0: prez
+				prez pass
 			*/
 			{
+				renderPassBeginInfo.renderPass = passes.prez->renderPass;
+				renderPassBeginInfo.framebuffer = passes.prez->framebuffer;
+
+				clearValues[0].depthStencil = { 1.0f, 0 };
+				renderPassBeginInfo.clearValueCount = 1;
+
+				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+				VkViewport viewport = vks::initializers::viewport((float)width, (float)height, 0.0f, 1.0f);
+				vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
+
+				VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
+				vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
+
 				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &dsPrez, 0, nullptr);
 				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.prez);
 
@@ -969,13 +853,29 @@ public:
 				vkCmdDrawIndexed(drawCmdBuffers[i], models.model.indices.count, 3, 0, 0, 0);
 				// Floor
 				models.floor.draw(drawCmdBuffers[i]);
+
+				vkCmdEndRenderPass(drawCmdBuffers[i]);
 			}
 
 			/*
-				subpass 1: direct lighting
+				direct lighting pass
 			*/
 			{
-				vkCmdNextSubpass(drawCmdBuffers[i], VK_SUBPASS_CONTENTS_INLINE);
+				renderPassBeginInfo.renderPass = passes.lighting->renderPass;
+				renderPassBeginInfo.framebuffer = passes.lighting->framebuffer;
+
+				clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+				clearValues[1].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+				clearValues[2].depthStencil = { 1.0f, 0 };
+				renderPassBeginInfo.clearValueCount = 3;
+
+				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+				VkViewport viewport = vks::initializers::viewport((float)width, (float)height, 0.0f, 1.0f);
+				vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
+
+				VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
+				vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
 
 				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.lighting);
 
@@ -986,13 +886,100 @@ public:
 				// Floor
 				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &dsLighting.floor, 0, nullptr);
 				models.floor.draw(drawCmdBuffers[i]);
+
+				vkCmdEndRenderPass(drawCmdBuffers[i]);
 			}
 
 			/*
-				subpass 2: ssr
+				downsamplerCS
 			*/
 			{
-				vkCmdNextSubpass(drawCmdBuffers[i], VK_SUBPASS_CONTENTS_INLINE);
+				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_COMPUTE, pipelines.downsampleCS);
+
+				// depthHierarchy[0 ~ mipLevel-1]: VK_IMAGE_LAYOUT_UNDEFINED -> VK_IMAGE_LAYOUT_GENERAL
+				VkImageMemoryBarrier imageMemoryBarrier = {};
+				imageMemoryBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+				imageMemoryBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+				imageMemoryBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+				imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+				imageMemoryBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+				imageMemoryBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				imageMemoryBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				imageMemoryBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, depthHierarchy.mipLevel, 0, 1 };
+				imageMemoryBarrier.image = depthHierarchy.image;
+
+				vkCmdPipelineBarrier(drawCmdBuffers[i], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					0, 0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+
+				for (uint32_t j = 0; j < depthHierarchy.mipLevel; j++)
+				{
+					uint32_t dispatchX, dispatchY, dispatchZ;
+					if (j == 0) {
+						dispatchX = (width + 7) / 8;
+						dispatchY = (height + 7) / 8;
+						dispatchZ = 1;
+					}
+					else {
+						dispatchX = ((width >> j) + 7) / 8;
+						dispatchY = ((height >> j) + 7) / 8;
+						dispatchZ = 1;
+					}
+
+					vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_COMPUTE, ppLayoutDownsampleCS, 0, 1, &depthHierarchy.descriptorSets[j], 0, nullptr);
+
+					// Bind push constants
+					//
+					cbDownsample data;
+					data.slice = j;
+					if (j == 0) {
+						data.outputSize[0] = (float)(width);
+						data.outputSize[1] = (float)(height);
+						data.invInputSize[0] = 1.0f / (float)(width);
+						data.invInputSize[1] = 1.0f / (float)(height);
+					}
+					else {
+						data.outputSize[0] = (float)(width >> j);
+						data.outputSize[1] = (float)(height >> j);
+						data.invInputSize[0] = 1.0f / (float)(width >> (j - 1));
+						data.invInputSize[1] = 1.0f / (float)(height >> (j - 1));
+					}
+					vkCmdPushConstants(drawCmdBuffers[i], ppLayoutDownsampleCS, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cbDownsample), (void*)&data);
+
+					// Draw
+					//
+					vkCmdDispatch(drawCmdBuffers[i], dispatchX, dispatchY, dispatchZ);
+
+					// depthHierarchy[0 ~ mipLevel-1]: VK_IMAGE_LAYOUT_GENERAL -> VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+					imageMemoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+					imageMemoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+					imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+					imageMemoryBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+					imageMemoryBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, j, 1, 0, 1 };
+					imageMemoryBarrier.image = depthHierarchy.image;
+
+					// transition general layout if destination image to shader read only for source image
+					vkCmdPipelineBarrier(drawCmdBuffers[i], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+						0, 0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+				}
+			}
+
+			/*
+				ssr pass
+			*/
+			{
+				renderPassBeginInfo.renderPass = passes.ssr->renderPass;
+				renderPassBeginInfo.framebuffer = passes.ssr->framebuffer;
+
+				clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+				renderPassBeginInfo.clearValueCount = 1;
+
+				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+				VkViewport viewport = vks::initializers::viewport((float)width, (float)height, 0.0f, 1.0f);
+				vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
+
+				VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
+				vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
 
 				VkDeviceSize offsets[1] = { 0 };
 				vkCmdBindVertexBuffers(drawCmdBuffers[i], 0, 1, &screenQuad.vertices.buffer, offsets);
@@ -1002,23 +989,37 @@ public:
 				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.ssr);
 
 				vkCmdDrawIndexed(drawCmdBuffers[i], screenQuad.indexCount, 1, 0, 0, 0);
+
+				vkCmdEndRenderPass(drawCmdBuffers[i]);
 			}
 
 			/*
-				subpass 3: composition
+				composition pass
 			*/
 			{
-				vkCmdNextSubpass(drawCmdBuffers[i], VK_SUBPASS_CONTENTS_INLINE);
+				renderPassBeginInfo.renderPass = renderPass;
+				renderPassBeginInfo.framebuffer = frameBuffers[i];
+
+				clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+				renderPassBeginInfo.clearValueCount = 1;
+
+				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+				VkViewport viewport = vks::initializers::viewport((float)width, (float)height, 0.0f, 1.0f);
+				vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
+
+				VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
+				vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
 
 				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &dsComposition, 0, nullptr);
 				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.composition);
 
 				vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
+
+				drawUI(drawCmdBuffers[i]);
+
+				vkCmdEndRenderPass(drawCmdBuffers[i]);
 			}
-
-			drawUI(drawCmdBuffers[i]);
-
-			vkCmdEndRenderPass(drawCmdBuffers[i]);
 
 			VK_CHECK_RESULT(vkEndCommandBuffer(drawCmdBuffers[i]));
 		}
@@ -1041,6 +1042,10 @@ public:
 		loadAssets();
 		prepareScreenQuad();
 		prepareUniformBuffers();
+
+		depthHierarchy.init(vulkanDevice, width, height, VK_FORMAT_R32_SFLOAT);
+
+		graphicsPassPrepare();
 
 		setupDescriptorSetLayout();
 		preparePipelines();
@@ -1067,6 +1072,122 @@ public:
 			updateUniformBufferLighting();
 			updateUniformBufferSsr();
 		}
+	}
+
+	virtual void windowResized() override {
+		// resource that have been recreated: depthStencil, swapchain image & its framebuffer
+
+		depthHierarchy.recreateOnResize(vulkanDevice, width, height, VK_FORMAT_R32_SFLOAT);
+
+		// remaining part of the resources to be recreated
+		// render target & its framebuffer
+		recreateIntermediateFramebuffer();
+
+		// descriptor set related with those rendertarget
+		updateDescriptorSetOnResize();
+	}
+
+	void recreateIntermediateFramebuffer() {
+		// prez pass
+		//
+		passes.prez->clearBeforeRecreate(width, height);
+
+		vks::FramebufferAttachment depth;
+		depth.image = depthStencil.image;
+		depth.memory = depthStencil.mem;
+		depth.view = depthStencil.view;
+		depth.format = depthFormat;
+		depth.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+		depth.description = {
+			0,
+			depth.format,
+			VK_SAMPLE_COUNT_1_BIT,
+			VK_ATTACHMENT_LOAD_OP_CLEAR,
+			VK_ATTACHMENT_STORE_OP_STORE,
+			VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+			VK_ATTACHMENT_STORE_OP_DONT_CARE,
+			VK_IMAGE_LAYOUT_UNDEFINED,
+			VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+		};
+		depth.weakRef = true;
+		passes.prez->attachments.push_back(depth);
+
+		passes.prez->createFrameBuffer();
+
+		// lighting pass
+		//
+		passes.lighting->clearBeforeRecreate(width, height);
+
+		// Normal
+		passes.lighting->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		// Color
+		passes.lighting->addAttachment(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+
+		depth.description.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+		depth.description.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+		depth.description.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		passes.lighting->attachments.push_back(depth);
+
+		passes.lighting->createFrameBuffer();
+
+		// ssr pass
+		//
+		passes.ssr->clearBeforeRecreate(width, height);
+
+		// Reflect Color
+		passes.ssr->addAttachment(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+
+		passes.ssr->createFrameBuffer();
+	}
+
+	void updateDescriptorSetOnResize() {
+		std::vector<VkWriteDescriptorSet> writeDescriptorSets;
+		/*
+			Downsample pass
+		*/
+		for (int i = 0; i < depthHierarchy.mipLevel; ++i) {
+			VkDescriptorImageInfo descriptorSrc = { VK_NULL_HANDLE, i == 0 ? depthStencil.view : depthHierarchy.splitViews[i - 1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+			VkDescriptorImageInfo descriptorSampler;
+			descriptorSampler.sampler = depthHierarchy.sampler;
+			VkDescriptorImageInfo descriptorDst = { VK_NULL_HANDLE, depthHierarchy.splitViews[i], VK_IMAGE_LAYOUT_GENERAL };
+
+			writeDescriptorSets = {
+				vks::initializers::writeDescriptorSet(depthHierarchy.descriptorSets[i], VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 0, &descriptorSrc),
+				vks::initializers::writeDescriptorSet(depthHierarchy.descriptorSets[i], VK_DESCRIPTOR_TYPE_SAMPLER, 1, &descriptorSampler),
+				vks::initializers::writeDescriptorSet(depthHierarchy.descriptorSets[i], VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2, &descriptorDst)
+			};
+			vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
+		}
+
+		/*
+			SSR pass
+		*/
+		VkDescriptorImageInfo descriptorNormal = { passes.lighting->sampler, passes.lighting->attachments[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorImageInfo descriptorDepth = { passes.prez->sampler, depthHierarchy.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorImageInfo descriptorDirect = { passes.lighting->sampler, passes.lighting->attachments[1].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
+		writeDescriptorSets = {
+			// Binding 1: Normal buffer
+			vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &descriptorNormal),
+			// Binding 2: Depth buffer
+			vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &descriptorDepth),
+			// Binding 3: Direct lighting buffer
+			vks::initializers::writeDescriptorSet(dsSsr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &descriptorDirect),
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
+
+		/*
+			Composition pass
+		*/
+		VkDescriptorImageInfo descriptorReflect = { passes.ssr->sampler, passes.ssr->attachments[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
+		writeDescriptorSets = {
+			// Binding 1: Direct lighting buffer
+			vks::initializers::writeDescriptorSet(dsComposition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &descriptorDirect),
+			// Binding 2: Reflect color buffer
+			vks::initializers::writeDescriptorSet(dsComposition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &descriptorReflect),
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 	}
 
 	virtual void OnUpdateUIOverlay(vks::UIOverlay *overlay)
