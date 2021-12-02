@@ -264,12 +264,12 @@ namespace vks
 		*
 		* @return VkResult for the sampler creation
 		*/
-		VkResult createSampler(VkFilter magFilter, VkFilter minFilter, VkSamplerAddressMode adressMode)
+		VkResult createSampler(VkFilter magFilter, VkFilter minFilter, VkSamplerAddressMode adressMode, VkSamplerMipmapMode mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR)
 		{
 			VkSamplerCreateInfo samplerInfo = vks::initializers::samplerCreateInfo();
 			samplerInfo.magFilter = magFilter;
 			samplerInfo.minFilter = minFilter;
-			samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+			samplerInfo.mipmapMode = mipmapMode;
 			samplerInfo.addressModeU = adressMode;
 			samplerInfo.addressModeV = adressMode;
 			samplerInfo.addressModeW = adressMode;

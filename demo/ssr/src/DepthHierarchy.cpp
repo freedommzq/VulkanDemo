@@ -81,8 +81,8 @@ void DepthHierarchy::init(vks::VulkanDevice* device, uint32_t width, uint32_t he
 		if (sampler == VK_NULL_HANDLE) {
 			VkSamplerCreateInfo info = {};
 			info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-			info.magFilter = VK_FILTER_LINEAR;
-			info.minFilter = VK_FILTER_LINEAR;
+			info.magFilter = VK_FILTER_NEAREST;
+			info.minFilter = VK_FILTER_NEAREST;
 			info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
 			info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 			info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;

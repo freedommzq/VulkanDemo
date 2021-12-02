@@ -12,7 +12,7 @@
 
 #include "DepthHierarchy.h"
 
-#define ENABLE_VALIDATION true
+#define ENABLE_VALIDATION false
 
 class VulkanExample : public VulkanExampleBase
 {
@@ -69,11 +69,15 @@ public:
 
 	struct {
 		glm::mat4 projection;
+		glm::mat4 projInv;
 
 		// SSR settings
 		float maxDistance = 4.0;
 		float resolution = 0.1;
-		float thickness = 0.2;
+		float thickness = 0.015; // 0.2
+
+		int mostDetailedMip = 1;
+		int maxTraversalStep = 64;
 	}uboSsr;
 
 	struct {
@@ -118,8 +122,7 @@ public:
 	struct cbDownsample {
 		float outputSize[2];
 		float invInputSize[2];
-		uint32_t slice;
-		uint32_t padding[3];
+		uint32_t coverSize[2];
 	};
 	DepthHierarchy depthHierarchy;
 
@@ -201,7 +204,7 @@ public:
 		depth.weakRef = true;
 		passes.prez->attachments.push_back(depth);
 
-		VK_CHECK_RESULT(passes.prez->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+		VK_CHECK_RESULT(passes.prez->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_MIPMAP_MODE_NEAREST));
 		VK_CHECK_RESULT(passes.prez->createRenderPass());
 
 		// lighting pass
@@ -509,6 +512,7 @@ public:
 
 	void updateUniformBufferSsr() {
 		uboSsr.projection = camera.matrices.perspective;
+		uboSsr.projInv = glm::inverse(camera.matrices.perspective);
 		memcpy(uniformBuffers.ssr.mapped, &uboSsr, sizeof(uboSsr));
 	}
 
@@ -913,35 +917,38 @@ public:
 
 				for (uint32_t j = 0; j < depthHierarchy.mipLevel; j++)
 				{
-					uint32_t dispatchX, dispatchY, dispatchZ;
-					if (j == 0) {
-						dispatchX = (width + 7) / 8;
-						dispatchY = (height + 7) / 8;
-						dispatchZ = 1;
-					}
-					else {
-						dispatchX = ((width >> j) + 7) / 8;
-						dispatchY = ((height >> j) + 7) / 8;
-						dispatchZ = 1;
-					}
+					uint32_t outSize[2] = { width >> j, height >> j };
+					if (outSize[0] == 0) outSize[0] = 1;
+					if (outSize[1] == 0) outSize[1] = 1;
+
+					uint32_t dispatchX = (outSize[0] + 7) / 8;
+					uint32_t dispatchY = (outSize[1] + 7) / 8;
+					uint32_t dispatchZ = 1;
 
 					vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_COMPUTE, ppLayoutDownsampleCS, 0, 1, &depthHierarchy.descriptorSets[j], 0, nullptr);
 
 					// Bind push constants
 					//
 					cbDownsample data;
-					data.slice = j;
 					if (j == 0) {
 						data.outputSize[0] = (float)(width);
 						data.outputSize[1] = (float)(height);
 						data.invInputSize[0] = 1.0f / (float)(width);
 						data.invInputSize[1] = 1.0f / (float)(height);
+						data.coverSize[0] = 0;
+						data.coverSize[1] = 0;
 					}
 					else {
-						data.outputSize[0] = (float)(width >> j);
-						data.outputSize[1] = (float)(height >> j);
-						data.invInputSize[0] = 1.0f / (float)(width >> (j - 1));
-						data.invInputSize[1] = 1.0f / (float)(height >> (j - 1));
+						uint32_t inSize[2] = { width >> (j - 1), height >> (j - 1) };
+						if (inSize[0] == 0) inSize[0] = 1;
+						if (inSize[1] == 0) inSize[1] = 1;
+
+						data.invInputSize[0] = 1.0f / (float)(inSize[0]);
+						data.invInputSize[1] = 1.0f / (float)(inSize[1]);
+						data.outputSize[0] = (float)(outSize[0]);
+						data.outputSize[1] = (float)(outSize[1]);
+						data.coverSize[0] = inSize[0] == 1 ? 1 : ((inSize[0] % 2) ? 3 : 2);
+						data.coverSize[1] = inSize[1] == 1 ? 1 : ((inSize[1] % 2) ? 3 : 2);
 					}
 					vkCmdPushConstants(drawCmdBuffers[i], ppLayoutDownsampleCS, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cbDownsample), (void*)&data);
 
@@ -1200,6 +1207,12 @@ public:
 				updateUniformBufferSsr();
 			}
 			if (overlay->sliderFloat("Thickness", &uboSsr.thickness, 0.0f, 2.0)) {
+				updateUniformBufferSsr();
+			}
+			if (overlay->sliderInt("Most Detailed Mip", &uboSsr.mostDetailedMip, 0, 10)) {
+				updateUniformBufferSsr();
+			}
+			if (overlay->sliderInt("Max Step", &uboSsr.maxTraversalStep, 0, 256)) {
 				updateUniformBufferSsr();
 			}
 		}

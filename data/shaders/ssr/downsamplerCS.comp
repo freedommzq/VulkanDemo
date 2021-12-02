@@ -32,7 +32,7 @@ layout(push_constant) uniform pushConstants
 {
     vec2 u_outputTextureSize;
     vec2 u_inputInvTextureSize;
-	uint u_slice;
+	uvec2 u_coverSize;
 } myPerMip;
 
 //--------------------------------------------------------------------------------------
@@ -41,7 +41,7 @@ layout(push_constant) uniform pushConstants
 layout(set=0, binding=0) uniform texture2D inputTexture;
 layout(set=0, binding=1) uniform sampler inputSampler;
 
-layout(set=0, binding=2, rgba16f) uniform writeonly image2D outputTexture;
+layout(set=0, binding=2, r32f) uniform writeonly image2D outputTexture;
 
 // Main function
 //--------------------------------------------------------------------------------------
@@ -52,10 +52,21 @@ void main()
         return;
 
     ivec2 pixel_coord = ivec2(gl_GlobalInvocationID.xy);
-    vec2 texcoord = 
-		(myPerMip.u_slice == 0) ?
-		(myPerMip.u_inputInvTextureSize.xy * gl_GlobalInvocationID.xy + myPerMip.u_inputInvTextureSize.xy) :
-		(myPerMip.u_inputInvTextureSize.xy * gl_GlobalInvocationID.xy * 2.0f + myPerMip.u_inputInvTextureSize.xy);
 
-    imageStore(outputTexture, pixel_coord, texture(sampler2D(inputTexture, inputSampler), texcoord));
+	float value = 1.0f;
+	if(myPerMip.u_coverSize.x == 0){
+		vec2 texCoord = myPerMip.u_inputInvTextureSize.xy * (gl_GlobalInvocationID.xy + vec2(0.5));
+		value = texture(sampler2D(inputTexture, inputSampler), texCoord).r;
+	}
+	else{
+		vec2 texCoordUL = (gl_GlobalInvocationID.xy * 2.0f + vec2(0.5)) * myPerMip.u_inputInvTextureSize.xy; // texcoord up-left
+
+		for(uint i = 0; i < myPerMip.u_coverSize.x; ++i){
+			for(uint j = 0; j < myPerMip.u_coverSize.y; ++j){
+				value = min(value, texture(sampler2D(inputTexture, inputSampler), texCoordUL + vec2(i, j) * myPerMip.u_inputInvTextureSize.xy).r);
+			}
+		}
+	}
+
+    imageStore(outputTexture, pixel_coord, vec4(value, vec3(1.0f)));
 }
