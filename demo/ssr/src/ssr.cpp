@@ -11,8 +11,9 @@
 #include "VulkanFrameBuffer.hpp"
 
 #include "DepthHierarchy.h"
+#include "GPUTimestamps.h"
 
-#define ENABLE_VALIDATION false
+#define ENABLE_VALIDATION true
 
 class VulkanExample : public VulkanExampleBase
 {
@@ -126,6 +127,9 @@ public:
 	};
 	DepthHierarchy depthHierarchy;
 
+	GPUTimestamps GPUTimer;
+	std::vector<TimeStamp> timeStamps;
+
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	{
 		title = "Deferred shading";
@@ -168,6 +172,8 @@ public:
 
 		screenQuad.destroy();
 		depthHierarchy.destroy(device);
+
+		GPUTimer.OnDestroy();
 	}
 
 	// Enable physical device features required for this example
@@ -831,6 +837,8 @@ public:
 		{
 			VK_CHECK_RESULT(vkBeginCommandBuffer(drawCmdBuffers[i], &cmdBufInfo));
 
+			GPUTimer.OnBeginFrame(drawCmdBuffers[i]);
+
 			/*
 				prez pass
 			*/
@@ -859,6 +867,8 @@ public:
 				models.floor.draw(drawCmdBuffers[i]);
 
 				vkCmdEndRenderPass(drawCmdBuffers[i]);
+
+				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
 			}
 
 			/*
@@ -892,6 +902,8 @@ public:
 				models.floor.draw(drawCmdBuffers[i]);
 
 				vkCmdEndRenderPass(drawCmdBuffers[i]);
+
+				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
 			}
 
 			/*
@@ -968,6 +980,8 @@ public:
 					vkCmdPipelineBarrier(drawCmdBuffers[i], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 						0, 0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
 				}
+
+				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
 			}
 
 			/*
@@ -998,6 +1012,8 @@ public:
 				vkCmdDrawIndexed(drawCmdBuffers[i], screenQuad.indexCount, 1, 0, 0, 0);
 
 				vkCmdEndRenderPass(drawCmdBuffers[i]);
+
+				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
 			}
 
 			/*
@@ -1023,9 +1039,13 @@ public:
 
 				vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
 
+				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
+
 				drawUI(drawCmdBuffers[i]);
 
 				vkCmdEndRenderPass(drawCmdBuffers[i]);
+
+				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
 			}
 
 			VK_CHECK_RESULT(vkEndCommandBuffer(drawCmdBuffers[i]));
@@ -1041,6 +1061,8 @@ public:
 		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
 
 		VulkanExampleBase::submitFrame();
+
+		GPUTimer.GetQueryResult(&timeStamps);
 	}
 
 	void prepare()
@@ -1051,6 +1073,16 @@ public:
 		prepareUniformBuffers();
 
 		depthHierarchy.init(vulkanDevice, width, height, VK_FORMAT_R32_SFLOAT);
+		std::vector<std::string> labels = {
+			"Begin Frame",
+			"Pre-Z",
+			"Direct Lighting",
+			"Depth Downsample",
+			"SSR Intersection",
+			"Composition",
+			"ImGUI"
+		};
+		GPUTimer.OnCreate(vulkanDevice, std::move(labels));
 
 		graphicsPassPrepare();
 
@@ -1222,6 +1254,11 @@ public:
 			}
 			if (overlay->sliderFloat("Roughness", &uboComposition.roughness, 0.0, 1.0)) {
 				updateUniformBufferComposition();
+			}
+		}
+		if (overlay->header("GPU Profile")) {
+			for (auto& timeStamp : timeStamps) {
+				ImGui::Text("%-22s: %7.1f", timeStamp.m_label.c_str(), timeStamp.m_microseconds);
 			}
 		}
 	}
