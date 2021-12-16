@@ -94,6 +94,7 @@ public:
 
 class VulkanExampleBase
 {
+	friend class ParticleEffect;
 private:
 	std::string getWindowTitle();
 	bool viewUpdated = false;

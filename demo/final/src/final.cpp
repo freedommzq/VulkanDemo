@@ -11,6 +11,7 @@
 #include "VulkanglTFModel.h"
 
 #include "GPUTimestamps.h"
+#include "ParticleEffect.h"
 
 #define VERTEX_BUFFER_BIND_ID 0
 #define ENABLE_VALIDATION true
@@ -70,7 +71,9 @@ public:
 		vks::Buffer ssaoBlur;
 		vks::Buffer lighting;
 		vks::Buffer ssr;
+		vks::Buffer ssrBlur;
 		vks::Buffer composition;
+		vks::Buffer tonemapping;
 	} uniformBuffers;
 
 	// This UBO stores the shadow matrices for all of the light sources
@@ -122,16 +125,22 @@ public:
 		glm::vec4 viewPos;
 
 		// SSR settings
-		float maxDistance = 4.0;
-		float resolution = 0.1;
-		float thickness = 0.2;
+		float maxDistance = 4.0f;
+		float resolution = 0.1f;
+		float thickness = 0.2f;
 	}uboSsr;
 
 	struct {
-		int32_t ssrBlurSize = 1;
-		float blendFactor = 0.2;
-		float exposure = 1.0;
+		int32_t size = 1;
+	} uboSsrBlur;
+
+	struct {
+		float blendFactor = 0.2f;
 	}uboComposition;
+
+	struct {
+		float exposure = 1.0f;
+	} uboTonemapping;
 
 	/*
 		PIPELINE
@@ -146,8 +155,17 @@ public:
 		VkPipeline ssaoBlur;
 		VkPipeline lighting;
 		VkPipeline ssr;
+		VkPipeline ssrBlur;
 		VkPipeline composition;
+		VkPipeline tonemapping;
 	} pipelines;
+
+	struct BlurSpecData {
+		uint32_t channelCount;
+	};
+	std::array<VkSpecializationMapEntry, 1> blurSpecMapEntries = {
+		vks::initializers::specializationMapEntry(0, offsetof(BlurSpecData, channelCount), sizeof(BlurSpecData::channelCount))
+	};
 
 	struct {
 		VkDescriptorSet shadow;
@@ -157,8 +175,10 @@ public:
 		VkDescriptorSet ssaoBlur;
 		VkDescriptorSet lighting;
 		VkDescriptorSet ssr;
+		VkDescriptorSet ssrBlur;
+		VkDescriptorSet composition;
 	} descriptorSets;
-	VkDescriptorSet descriptorSet; // composition
+	VkDescriptorSet descriptorSet; // tonemapping
 
 	struct {
 		std::unique_ptr<vks::Framebuffer> shadow;
@@ -167,10 +187,14 @@ public:
 		std::unique_ptr<vks::Framebuffer> ssaoBlur;
 		std::unique_ptr<vks::Framebuffer> lighting;
 		std::unique_ptr<vks::Framebuffer> ssr;
+		std::unique_ptr<vks::Framebuffer> ssrBlur;
+		std::unique_ptr<vks::Framebuffer> composition;
 	} passes;
 
 	GPUTimestamps GPUTimer;
 	std::vector<TimeStamp> timeStamps;
+
+	ParticleEffect particles;
 
 	float lerp(float a, float b, float f) { return a + f * (b - a); }
 
@@ -184,8 +208,11 @@ public:
 		camera.movementSpeed = 5.0f;
 		camera.rotationSpeed = 0.25f;
 #endif
-		camera.position = { 2.15f, 0.3f, -8.75f };
-		camera.setRotation(glm::vec3(-0.75f, 12.5f, 0.0f));
+		//camera.flipY = true;
+		//camera.position = { 2.15f, 0.3f, -8.75f };
+		//camera.setRotation(glm::vec3(-0.75f, 12.5f, 0.0f));
+		camera.position = { 0.0f, 0.0f, -8.75f };
+		camera.setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
 		camera.setPerspective(60.0f, (float)width / (float)height, zNear, zFar);
 		timerSpeed *= 0.25f;
 		paused = true;
@@ -200,7 +227,9 @@ public:
 		vkDestroyPipeline(device, pipelines.ssaoBlur, nullptr);
 		vkDestroyPipeline(device, pipelines.lighting, nullptr);
 		vkDestroyPipeline(device, pipelines.ssr, nullptr);
+		vkDestroyPipeline(device, pipelines.ssrBlur, nullptr);
 		vkDestroyPipeline(device, pipelines.composition, nullptr);
+		vkDestroyPipeline(device, pipelines.tonemapping, nullptr);
 
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 		vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
@@ -212,7 +241,9 @@ public:
 		uniformBuffers.ssaoBlur.destroy();
 		uniformBuffers.lighting.destroy();
 		uniformBuffers.ssr.destroy();
+		uniformBuffers.ssrBlur.destroy();
 		uniformBuffers.composition.destroy();
+		uniformBuffers.tonemapping.destroy();
 
 		// Textures
 		textures.model.colorMap.destroy();
@@ -222,6 +253,7 @@ public:
 		textures.ssaoNoise.destroy();
 
 		GPUTimer.OnDestroy();
+		particles.destroy();
 	}
 
 	// Enable physical device features required for this example
@@ -316,10 +348,24 @@ public:
 		passes.ssr->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
 		VK_CHECK_RESULT(passes.ssr->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
 		VK_CHECK_RESULT(passes.ssr->createRenderPass());
+
+		// SSR Blur
+		//
+		passes.ssrBlur = std::make_unique<vks::Framebuffer>(vulkanDevice, width, height);
+		passes.ssrBlur->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		VK_CHECK_RESULT(passes.ssrBlur->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+		VK_CHECK_RESULT(passes.ssrBlur->createRenderPass());
+
+		// Composition
+		//
+		passes.composition = std::make_unique<vks::Framebuffer>(vulkanDevice, width, height);
+		passes.composition->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		VK_CHECK_RESULT(passes.composition->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+		VK_CHECK_RESULT(passes.composition->createRenderPass());
 	}
 
 	virtual void setupRenderPass() override {
-		// Composition Pass
+		// Tonemapping Pass
 		//
 		VkAttachmentDescription attachment = {};
 		attachment.format = swapChain.colorFormat;
@@ -571,8 +617,54 @@ public:
 
 				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
 			}
-			
+
+			// SSR Blur
+			//
+			{
+				renderPassBeginInfo.renderPass = passes.ssrBlur->renderPass;
+				renderPassBeginInfo.framebuffer = passes.ssrBlur->framebuffer;
+
+				renderPassBeginInfo.clearValueCount = 1;
+				clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+
+				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.ssrBlur);
+				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets.ssrBlur, 0, NULL);
+				vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
+
+				vkCmdEndRenderPass(drawCmdBuffers[i]);
+
+				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
+			}
+
 			// Composition
+			//
+			{
+				renderPassBeginInfo.renderPass = passes.composition->renderPass;
+				renderPassBeginInfo.framebuffer = passes.composition->framebuffer;
+
+				renderPassBeginInfo.clearValueCount = 1;
+				clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+
+				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.composition);
+				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets.composition, 0, NULL);
+				vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
+
+				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
+
+				// Particles
+				//
+				particles.draw(drawCmdBuffers[i]);
+
+				vkCmdEndRenderPass(drawCmdBuffers[i]);
+
+				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
+			}
+			
+			// Tonemapping
 			//
 			{
 				renderPassBeginInfo.renderPass = renderPass;
@@ -585,7 +677,7 @@ public:
 
 				VkDeviceSize offsets[1] = { 0 };
 				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
-				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.composition);
+				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.tonemapping);
 
 				vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
 
@@ -629,15 +721,15 @@ public:
 	{
 		std::vector<VkDescriptorPoolSize> poolSizes =
 		{
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 8),
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18)
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 20)
 		};
 
 		VkDescriptorPoolCreateInfo descriptorPoolInfo =
 			vks::initializers::descriptorPoolCreateInfo(
 				static_cast<uint32_t>(poolSizes.size()),
 				poolSizes.data(),
-				8);
+				10);
 
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 	}
@@ -816,7 +908,7 @@ public:
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
 		/*
-			COMPOSITION
+			SSR BLUR
 		*/
 		VkDescriptorImageInfo texDescriptorReflectColor =
 			vks::initializers::descriptorImageInfo(
@@ -824,14 +916,46 @@ public:
 				passes.ssr->attachments[0].view,
 				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.ssrBlur));
+		writeDescriptorSets = {
+			vks::initializers::writeDescriptorSet(descriptorSets.ssrBlur, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorReflectColor),
+			vks::initializers::writeDescriptorSet(descriptorSets.ssrBlur, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.ssrBlur.descriptor),
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+
+		/*
+			Composition
+		*/
+		VkDescriptorImageInfo texDescriptorReflectColorBlur =
+			vks::initializers::descriptorImageInfo(
+				passes.ssrBlur->sampler,
+				passes.ssrBlur->attachments[0].view,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.composition));
 		writeDescriptorSets = {
 			// Binding 1: Direct lighting color texture
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorDirectColor),
-			// Binding 2: Reflect color texture
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorReflectColor),
+			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorDirectColor),
+			// Binding 2: Reflect color blur texture
+			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorReflectColorBlur),
 			// Binding 4: Fragment shader uniform buffer
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.composition.descriptor),
+			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.composition.descriptor)
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+
+		/*
+			Tonemapping
+		*/
+		VkDescriptorImageInfo texDescriptorComposition =
+			vks::initializers::descriptorImageInfo(
+				passes.composition->sampler,
+				passes.composition->attachments[0].view,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
+		writeDescriptorSets = {
+			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorComposition),
+			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.tonemapping.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 	}
@@ -903,7 +1027,17 @@ public:
 		*/
 		pipelineCI.renderPass = passes.ssaoBlur->renderPass;
 
-		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/ssaoBlur.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/blur.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+		BlurSpecData blurSpecDataSSAO;
+		blurSpecDataSSAO.channelCount = 1;
+		VkSpecializationInfo specInfoSSAO = vks::initializers::specializationInfo(
+			static_cast<uint32_t>(blurSpecMapEntries.size()),
+			blurSpecMapEntries.data(),
+			sizeof(BlurSpecData),
+			&blurSpecDataSSAO
+		);
+		shaderStages[1].pSpecializationInfo = &specInfoSSAO;
 
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.ssaoBlur));
 
@@ -926,13 +1060,41 @@ public:
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.ssr));
 
 		/*
-			COMPOSITION
+			SSR BLUR
 		*/
-		pipelineCI.renderPass = renderPass;
+		pipelineCI.renderPass = passes.ssrBlur->renderPass;
+
+		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/blur.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+		BlurSpecData blurSpecDataSSR;
+		blurSpecDataSSR.channelCount = 3;
+		VkSpecializationInfo specInfoSSR = vks::initializers::specializationInfo(
+			static_cast<uint32_t>(blurSpecMapEntries.size()),
+			blurSpecMapEntries.data(),
+			sizeof(BlurSpecData),
+			&blurSpecDataSSR
+		);
+		shaderStages[1].pSpecializationInfo = &specInfoSSR;
+
+		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.ssrBlur));
+
+		/*
+			Composition
+		*/
+		pipelineCI.renderPass = passes.composition->renderPass;
 
 		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/composition.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.composition));
+
+		/*
+			Tonemapping
+		*/
+		pipelineCI.renderPass = renderPass;
+
+		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/tonemapping.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.tonemapping));
 
 		/*
 			SHADOW
@@ -1007,12 +1169,26 @@ public:
 			&uniformBuffers.ssr,
 			sizeof(uboSsr)));
 
+		// SSR blur fragment shader
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&uniformBuffers.ssrBlur,
+			sizeof(uboSsrBlur)));
+
 		// Composition fragment shader
 		VK_CHECK_RESULT(vulkanDevice->createBuffer(
 			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 			&uniformBuffers.composition,
 			sizeof(uboComposition)));
+
+		// Tonemapping fragment shader
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&uniformBuffers.tonemapping,
+			sizeof(uboTonemapping)));
 
 		// Map persistent
 		VK_CHECK_RESULT(uniformBuffers.shadowGeometryShader.map());
@@ -1021,7 +1197,9 @@ public:
 		VK_CHECK_RESULT(uniformBuffers.ssaoBlur.map());
 		VK_CHECK_RESULT(uniformBuffers.lighting.map());
 		VK_CHECK_RESULT(uniformBuffers.ssr.map());
+		VK_CHECK_RESULT(uniformBuffers.ssrBlur.map());
 		VK_CHECK_RESULT(uniformBuffers.composition.map());
+		VK_CHECK_RESULT(uniformBuffers.tonemapping.map());
 
 		// Init some values
 		uboGeometry.instancePos[0] = glm::vec4(0.0f);
@@ -1050,7 +1228,9 @@ public:
 		updateUniformBufferSsaoBlur();
 		updateUniformBufferLighting();
 		updateUniformBufferSsr();
+		updateUniformBufferSsrBlur();
 		updateUniformBufferComposition();
+		updateUniformBufferTonemapping();
 	}
 
 	void updateUniformBufferGeometry()
@@ -1109,8 +1289,16 @@ public:
 		memcpy(uniformBuffers.ssr.mapped, &uboSsr, sizeof(uboSsr));
 	}
 
+	void updateUniformBufferSsrBlur() {
+		memcpy(uniformBuffers.ssrBlur.mapped, &uboSsrBlur, sizeof(uboSsrBlur));
+	}
+
 	void updateUniformBufferComposition() {
 		memcpy(uniformBuffers.composition.mapped, &uboComposition, sizeof(uboComposition));
+	}
+
+	void updateUniformBufferTonemapping() {
+		memcpy(uniformBuffers.tonemapping.mapped, &uboTonemapping, sizeof(uboTonemapping));
 	}
 
 	Light initLight(glm::vec3 pos, glm::vec3 target, glm::vec3 color)
@@ -1155,12 +1343,15 @@ public:
 			"SSAO Blur",
 			"Direct Lighting",
 			"SSR Intersection",
+			"SSR Blur",
 			"Composition",
+			"Particles",
+			"Tonemapping",
 			"ImGUI"
 		};
 		GPUTimer.OnCreate(vulkanDevice, std::move(labels));
-
 		prepareGraphicsPasses();
+		particles.init(vulkanDevice, this, passes.composition->renderPass);
 
 		initLights();
 		prepareUniformBuffers();
@@ -1179,6 +1370,7 @@ public:
 	{
 		if (!prepared)
 			return;
+		particles.update();
 		draw();
 		updateUniformBufferLighting();
 		if (camera.updated) 
@@ -1256,6 +1448,18 @@ public:
 		passes.ssr->clearBeforeRecreate(width, height);
 		passes.ssr->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
 		passes.ssr->createFrameBuffer();
+
+		// SSR Blur
+		//
+		passes.ssrBlur->clearBeforeRecreate(width, height);
+		passes.ssrBlur->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		passes.ssrBlur->createFrameBuffer();
+
+		// Composition
+		//
+		passes.composition->clearBeforeRecreate(width, height);
+		passes.composition->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		passes.composition->createFrameBuffer();
 	}
 
 	void updateDescriptorSetOnResize() {
@@ -1345,7 +1549,7 @@ public:
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
 		/*
-			COMPOSITION
+			SSR BLUR
 		*/
 		VkDescriptorImageInfo texDescriptorReflectColor =
 			vks::initializers::descriptorImageInfo(
@@ -1354,10 +1558,38 @@ public:
 				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
 		writeDescriptorSets = {
+			vks::initializers::writeDescriptorSet(descriptorSets.ssrBlur, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorReflectColor)
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+
+		/*
+			Composition
+		*/
+		VkDescriptorImageInfo texDescriptorReflectColorBlur =
+			vks::initializers::descriptorImageInfo(
+				passes.ssrBlur->sampler,
+				passes.ssrBlur->attachments[0].view,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+		writeDescriptorSets = {
 			// Binding 1: Direct lighting color texture
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorDirectColor),
-			// Binding 2: Reflect color texture
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorReflectColor)
+			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorDirectColor),
+			// Binding 2: Reflect color blur texture
+			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorReflectColorBlur)
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+
+		/*
+			Tonemapping
+		*/
+		VkDescriptorImageInfo texDescriptorComposition =
+			vks::initializers::descriptorImageInfo(
+				passes.composition->sampler,
+				passes.composition->attachments[0].view,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+		writeDescriptorSets = {
+			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorComposition)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 	}
@@ -1365,10 +1597,10 @@ public:
 	virtual void OnUpdateUIOverlay(vks::UIOverlay *overlay)
 	{
 		if (overlay->header("SSAO Settings")) {
-			if (overlay->sliderFloat("Radius", &uboSsao.radius, 0.0f, 2.0)) {
+			if (overlay->sliderFloat("Radius", &uboSsao.radius, 0.0f, 2.0f)) {
 				updateUniformBufferSsao();
 			}
-			if (overlay->sliderFloat("Bias", &uboSsao.bias, 0.0f, 0.2)) {
+			if (overlay->sliderFloat("Bias", &uboSsao.bias, 0.0f, 0.2f)) {
 				updateUniformBufferSsao();
 			}
 			if (overlay->sliderInt("SSAO Blur Size", &uboSsaoBlur.size, 0, 3)) {
@@ -1385,27 +1617,27 @@ public:
 		}
 		if (overlay->header("SSR Settings")) {
 			// ray marching
-			if (overlay->sliderFloat("Max Distance", &uboSsr.maxDistance, 0.0f, 5.0)) {
+			if (overlay->sliderFloat("Max Distance", &uboSsr.maxDistance, 0.0f, 5.0f)) {
 				updateUniformBufferSsr();
 			}
-			if (overlay->sliderFloat("Resolution", &uboSsr.resolution, 0.0f, 1.0)) {
+			if (overlay->sliderFloat("Resolution", &uboSsr.resolution, 0.0f, 1.0f)) {
 				updateUniformBufferSsr();
 			}
-			if (overlay->sliderFloat("Thickness", &uboSsr.thickness, 0.0f, 2.0)) {
+			if (overlay->sliderFloat("Thickness", &uboSsr.thickness, 0.0f, 2.0f)) {
 				updateUniformBufferSsr();
 			}
 			// blur
-			if (overlay->sliderInt("Blur Size", &uboComposition.ssrBlurSize, 0, 10)) {
-				updateUniformBufferComposition();
+			if (overlay->sliderInt("Blur Size", &uboSsrBlur.size, 0, 10)) {
+				updateUniformBufferSsrBlur();
 			}
 			// blend
-			if (overlay->sliderFloat("Blend Factor", &uboComposition.blendFactor, 0.0, 1.0)) {
+			if (overlay->sliderFloat("Blend Factor", &uboComposition.blendFactor, 0.0f, 1.0f)) {
 				updateUniformBufferComposition();
 			}
 		}
 		if (overlay->header("HDR Settings")) {
-			if (overlay->sliderFloat("Exposure", &uboComposition.exposure, 0.0, 5.0)) {
-				updateUniformBufferComposition();
+			if (overlay->sliderFloat("Exposure", &uboTonemapping.exposure, 0.0f, 5.0f)) {
+				updateUniformBufferTonemapping();
 			}
 		}
 		if (overlay->header("GPU Profile")) {

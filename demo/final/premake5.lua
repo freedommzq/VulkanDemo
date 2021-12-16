@@ -12,6 +12,7 @@ project "final"
     files{
         "src/**.h",
         "src/**.cpp",
+        "src/osg/**.h",
 
         "../../data/shaders/%{prj.name}/**.vert",
         "../../data/shaders/%{prj.name}/**.frag",
