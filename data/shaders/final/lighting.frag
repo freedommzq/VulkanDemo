@@ -3,8 +3,9 @@
 layout (binding = 1) uniform sampler2D samplerposition;
 layout (binding = 2) uniform sampler2D samplerNormal;
 layout (binding = 3) uniform sampler2D samplerAlbedo;
-layout (binding = 5) uniform sampler2DArray samplerShadowMap;
-layout (binding = 6) uniform sampler2D samplerSsaoBlur;
+layout (binding = 4) uniform sampler2D samplerEmissive;
+layout (binding = 6) uniform sampler2DArray samplerShadowMap;
+layout (binding = 7) uniform sampler2D samplerSsaoBlur;
 
 layout (location = 0) in vec2 inUV;
 
@@ -23,7 +24,7 @@ struct Light
 	mat4 viewMatrix;
 };
 
-layout (binding = 4) uniform UBO 
+layout (binding = 5) uniform UBO 
 {
 	vec4 viewPos;
 	Light lights[LIGHT_COUNT];
@@ -92,6 +93,7 @@ void main()
 	vec3 fragPos = texture(samplerposition, inUV).rgb;
 	vec3 normal = texture(samplerNormal, inUV).rgb;
 	vec4 albedo = texture(samplerAlbedo, inUV);
+	vec3 emissive = texture(samplerEmissive, inUV).rgb;
 
 	// Ambient part
 	float aoFactor = ubo.useSsao == 1 ? texture(samplerSsaoBlur, inUV).x : 1.0;
@@ -133,7 +135,9 @@ void main()
 		vec3 spec = vec3(pow(NdotR, 16.0) * albedo.a * 2.5);
 
 		fragcolor += vec3((aoFactor * diff + spec) * spotEffect * heightAttenuation) * ubo.lights[i].color.rgb * albedo.rgb;
-	}    	
+	}
+
+	fragcolor += emissive;
 
 	// Shadow calculations in a separate pass
 	float shadowFactor = ubo.useShadow == 1 ? shadow(fragPos) : 1.0;

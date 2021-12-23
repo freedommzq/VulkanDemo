@@ -2,6 +2,8 @@ C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V shadow.vert -o spirv\shadow.v
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V shadow.geom -o spirv\shadow.geom.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V geometry.vert -o spirv\geometry.vert.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V geometry.frag -o spirv\geometry.frag.spv
+C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V geometryLightSphere.vert -o spirv\geometryLightSphere.vert.spv
+C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V geometryLightSphere.frag -o spirv\geometryLightSphere.frag.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V particleQuad.vert -o spirv\particleQuad.vert.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V particleLine.vert -o spirv\particleLine.vert.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V particlePoint.vert -o spirv\particlePoint.vert.spv
@@ -15,4 +17,9 @@ C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V lighting.frag -o spirv\lighti
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V ssr_world.frag -o spirv\ssr_world.frag.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V composition.frag -o spirv\composition.frag.spv
 C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V tonemapping.frag -o spirv\tonemapping.frag.spv
+
+C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V bloomPrefilter.comp -o spirv\bloomPrefilter.comp.spv
+C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V bloomDownsampleHorizontal.comp -o spirv\bloomDownsampleHorizontal.comp.spv
+C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V bloomDownsampleVertical.comp -o spirv\bloomDownsampleVertical.comp.spv
+C:\VulkanSDK\1.2.148.0\Bin\glslangValidator.exe -V bloomUpsample.comp -o spirv\bloomUpsample.comp.spv
 pause

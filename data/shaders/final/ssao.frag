@@ -6,7 +6,7 @@ layout (binding = 3) uniform sampler2D ssaoNoise;
 
 #define SSAO_KERNEL_SIZE 32
 
-layout (binding = 4) uniform UBO 
+layout (binding = 5) uniform UBO 
 {
 	mat4 projection;
 	mat4 view;

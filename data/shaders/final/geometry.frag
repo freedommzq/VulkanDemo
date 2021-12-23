@@ -12,6 +12,7 @@ layout (location = 4) in vec3 inTangent;
 layout (location = 0) out vec4 outPosition;
 layout (location = 1) out vec4 outNormal;
 layout (location = 2) out vec4 outAlbedo;
+layout (location = 3) out vec4 outEmissive;
 
 #define NEAR 0.1
 #define FAR 64.0
@@ -35,4 +36,5 @@ void main()
 	outNormal = vec4(N, 1.0);
 
 	outAlbedo = texture(samplerColor, inUV);
+	outEmissive = vec4(vec3(0.0), 1.0);
 }

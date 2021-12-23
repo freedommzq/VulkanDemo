@@ -94,7 +94,6 @@ public:
 
 class VulkanExampleBase
 {
-	friend class ParticleEffect;
 private:
 	std::string getWindowTitle();
 	bool viewUpdated = false;
@@ -114,9 +113,6 @@ private:
 	void destroyCommandBuffers();
 	std::string shaderDir = "glsl";
 protected:
-	// Returns the path to the root of the glsl or hlsl shader directory.
-	std::string getShadersPath() const;
-
 	// Frame counter to display fps
 	uint32_t frameCounter = 0;
 	uint32_t lastFPS = 0;
@@ -141,8 +137,6 @@ protected:
 	void* deviceCreatepNextChain = nullptr;
 	/** @brief Logical device, application's view of the physical device (GPU) */
 	VkDevice device;
-	// Handle to the device graphics queue that command buffers are submitted to
-	VkQueue queue;
 	// Depth buffer format (selected during Vulkan initialization)
 	VkFormat depthFormat;
 	// Command buffer pool
@@ -163,8 +157,6 @@ protected:
 	VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
 	// List of shader modules created (stored for cleanup)
 	std::vector<VkShaderModule> shaderModules;
-	// Pipeline cache object
-	VkPipelineCache pipelineCache;
 	// Wraps the swap chain to present images (framebuffers) to the windowing system
 	VulkanSwapChain swapChain;
 	// Synchronization semaphores
@@ -176,6 +168,14 @@ protected:
 	} semaphores;
 	std::vector<VkFence> waitFences;
 public:
+	// Returns the path to the root of the glsl or hlsl shader directory.
+	std::string getShadersPath() const;
+
+	// Pipeline cache object
+	VkPipelineCache pipelineCache;
+	// Handle to the device graphics queue that command buffers are submitted to
+	VkQueue queue;
+
 	bool prepared = false;
 	bool resized = false;
 	uint32_t width = 1280;

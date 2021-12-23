@@ -1,0 +1,33 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform UBO {
+	float threshold;
+} ubo;
+
+layout(binding = 1) uniform sampler2D inputTexture;
+layout(binding = 2, rgba16f) uniform writeonly image2D outputTexture;
+
+layout(push_constant) uniform pushConstants
+{
+    vec2 u_outputTextureSize;
+	vec2 u_inputInvTextureSize;
+} myPerMip;
+
+void main()
+{
+    if (gl_GlobalInvocationID.x >= myPerMip.u_outputTextureSize.x || gl_GlobalInvocationID.y >= myPerMip.u_outputTextureSize.y)
+        return;
+
+	ivec2 pixel_coord = ivec2(gl_GlobalInvocationID.xy);
+    vec2 texcoord = myPerMip.u_inputInvTextureSize.xy * gl_GlobalInvocationID.xy * 2.0f + myPerMip.u_inputInvTextureSize.xy;
+
+	vec3 value = texture(inputTexture, texcoord).rgb;
+	if(value.r > ubo.threshold || value.g > ubo.threshold || value.b > ubo.threshold){
+		imageStore(outputTexture, pixel_coord, vec4(value, 1.0));
+	}
+	else{
+		imageStore(outputTexture, pixel_coord, vec4(vec3(0.0), 1.0));
+	}
+}

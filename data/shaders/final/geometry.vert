@@ -8,9 +8,8 @@ layout (location = 4) in vec4 inTangent;
 
 layout (binding = 0) uniform UBO 
 {
-	mat4 projection;
-	mat4 model;
 	mat4 view;
+	mat4 projection;
 	vec4 instancePos[3];
 } ubo;
 
@@ -25,13 +24,13 @@ void main()
 	vec4 tmpPos = vec4(inPos.xyz, 1.0) + ubo.instancePos[gl_InstanceIndex];
 
 	// Vertex position in world space
-	outWorldPos = vec3(ubo.model * tmpPos);
+	outWorldPos = vec3(tmpPos);
 	gl_Position = ubo.projection * ubo.view * vec4(outWorldPos, 1.0);
 	
 	outUV = inUV;
 
 	// Normal in world space
-	mat3 mNormal = transpose(inverse(mat3(ubo.model)));
+	mat3 mNormal = transpose(inverse(mat3(1.0)));
 	outNormal = mNormal * normalize(inNormal);	
 	outTangent = mNormal * normalize(inTangent.xyz);
 	

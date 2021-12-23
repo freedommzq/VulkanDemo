@@ -12,6 +12,7 @@
 
 #include "GPUTimestamps.h"
 #include "ParticleEffect.h"
+#include "Bloom.h"
 
 #define VERTEX_BUFFER_BIND_ID 0
 #define ENABLE_VALIDATION true
@@ -59,6 +60,7 @@ public:
 	struct {
 		vkglTF::Model model;
 		vkglTF::Model background;
+		vkglTF::Model lightSphere;
 	} models;
 
 	/*
@@ -86,12 +88,16 @@ public:
 	
 	// Geometry Pass (generate g-buffer)
 	struct {
-		glm::mat4 projection;
-		glm::mat4 model;
 		glm::mat4 view;
+		glm::mat4 projection;
 		glm::vec4 instancePos[3];
-		int layer;
 	} uboGeometry;
+
+	struct PushConstModel {
+		glm::mat4 model;
+	};
+	PushConstModel pcLightSphere;
+	glm::vec3 lightSphereTrans = glm::vec3(7.0, -7.0, -5.0);
 
 	struct {
 		glm::mat4 projection;
@@ -151,6 +157,7 @@ public:
 	struct {
 		VkPipeline shadowpass;
 		VkPipeline geometry;
+		VkPipeline geometryLightSphere;
 		VkPipeline ssao;
 		VkPipeline ssaoBlur;
 		VkPipeline lighting;
@@ -171,6 +178,7 @@ public:
 		VkDescriptorSet shadow;
 		VkDescriptorSet model;
 		VkDescriptorSet background;
+		VkDescriptorSet lightSphere;
 		VkDescriptorSet ssao;
 		VkDescriptorSet ssaoBlur;
 		VkDescriptorSet lighting;
@@ -196,6 +204,8 @@ public:
 
 	ParticleEffect particles;
 
+	Bloom bloom;
+
 	float lerp(float a, float b, float f) { return a + f * (b - a); }
 
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
@@ -217,12 +227,19 @@ public:
 		timerSpeed *= 0.25f;
 		paused = true;
 		settings.overlay = true;
+
+		width = 1920;
+		height = 1057;
+		UIOverlay.scale = 2.0f;
+
+		pcLightSphere.model = glm::translate(glm::mat4(1.0), lightSphereTrans);
 	}
 
 	~VulkanExample()
 	{
 		vkDestroyPipeline(device, pipelines.shadowpass, nullptr);
 		vkDestroyPipeline(device, pipelines.geometry, nullptr);
+		vkDestroyPipeline(device, pipelines.geometryLightSphere, nullptr);
 		vkDestroyPipeline(device, pipelines.ssao, nullptr);
 		vkDestroyPipeline(device, pipelines.ssaoBlur, nullptr);
 		vkDestroyPipeline(device, pipelines.lighting, nullptr);
@@ -254,6 +271,7 @@ public:
 
 		GPUTimer.OnDestroy();
 		particles.destroy();
+		bloom.destroy();
 	}
 
 	// Enable physical device features required for this example
@@ -296,6 +314,7 @@ public:
 		passes.geometry->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT); // position
 		passes.geometry->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT); // normal
 		passes.geometry->addAttachment(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT); // albedo
+		passes.geometry->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT); // emissive
 
 		// depth
 		vks::FramebufferAttachment depth;
@@ -359,7 +378,7 @@ public:
 		// Composition
 		//
 		passes.composition = std::make_unique<vks::Framebuffer>(vulkanDevice, width, height);
-		passes.composition->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		passes.composition->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
 		VK_CHECK_RESULT(passes.composition->createSampler(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
 		VK_CHECK_RESULT(passes.composition->createRenderPass());
 	}
@@ -459,7 +478,7 @@ public:
 	{
 		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
 
-		VkClearValue clearValues[4];
+		VkClearValue clearValues[5];
 
 		VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
 		renderPassBeginInfo.renderArea.offset.x = 0;
@@ -522,16 +541,24 @@ public:
 				renderPassBeginInfo.renderPass = passes.geometry->renderPass;
 				renderPassBeginInfo.framebuffer = passes.geometry->framebuffer;
 
-				renderPassBeginInfo.clearValueCount = 4;
+				renderPassBeginInfo.clearValueCount = 5;
 				clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
 				clearValues[1].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
 				clearValues[2].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-				clearValues[3].depthStencil = { 1.0f, 0 };
+				clearValues[3].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+				clearValues[4].depthStencil = { 1.0f, 0 };
 
 				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.geometry);
 				renderScene(drawCmdBuffers[i], false);
+
+				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.geometryLightSphere);
+				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets.lightSphere, 0, NULL);
+
+				vkCmdPushConstants(drawCmdBuffers[i], pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstModel), &pcLightSphere);
+
+				models.lightSphere.draw(drawCmdBuffers[i]);
 
 				vkCmdEndRenderPass(drawCmdBuffers[i]);
 
@@ -663,6 +690,14 @@ public:
 
 				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
 			}
+
+			// Bloom
+			//
+			{
+				bloom.draw(drawCmdBuffers[i]);
+
+				GPUTimer.NextTimeStamp(drawCmdBuffers[i]);
+			}
 			
 			// Tonemapping
 			//
@@ -704,6 +739,8 @@ public:
 		textures.background.colorMap.loadFromFile(getAssetPath() + "textures/stonefloor02_color_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 		textures.background.normalMap.loadFromFile(getAssetPath() + "textures/stonefloor02_normal_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 
+		models.lightSphere.loadFromFile(getAssetPath() + "models/sphere.gltf", vulkanDevice, queue, glTFLoadingFlags);
+
 		// SSAO
 		std::default_random_engine rndEngine(benchmark.active ? 0 : (unsigned)time(nullptr));
 		std::uniform_real_distribution<float> rndDist(0.0f, 1.0f);
@@ -719,17 +756,19 @@ public:
 
 	void setupDescriptorPool()
 	{
+		uint32_t descriptorSetCount = 11;
+
 		std::vector<VkDescriptorPoolSize> poolSizes =
 		{
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10),
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 20)
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, descriptorSetCount * 2),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descriptorSetCount * 6)
 		};
 
 		VkDescriptorPoolCreateInfo descriptorPoolInfo =
 			vks::initializers::descriptorPoolCreateInfo(
 				static_cast<uint32_t>(poolSizes.size()),
 				poolSizes.data(),
-				10);
+				descriptorSetCount);
 
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 	}
@@ -746,18 +785,23 @@ public:
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 2),
 			// Binding 3: Albedo texture
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 3),
-			// Binding 4: Fragment shader uniform buffer
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 4),
-			// Binding 5: Shadow map
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 5),
-			// Binding 6: Blured ao
+			// Binding 4: Emissive texture
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 4),
+			// Binding 5: Fragment shader uniform buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 5),
+			// Binding 6: Shadow map
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 6),
+			// Binding 7: Blured ao
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 7)
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &descriptorSetLayout));
 
 		// Shared pipeline layout used by all pipelines
 		VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&descriptorSetLayout, 1);
+		VkPushConstantRange pushConstantRange{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstModel) };
+		pPipelineLayoutCreateInfo.pushConstantRangeCount = 1;
+		pPipelineLayoutCreateInfo.pPushConstantRanges = &pushConstantRange;
 		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, nullptr, &pipelineLayout));
 	}
 
@@ -803,6 +847,14 @@ public:
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 
+		// LightSphere
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.lightSphere));
+		writeDescriptorSets = {
+			// Binding 0: Vertex shader uniform buffer
+			vks::initializers::writeDescriptorSet(descriptorSets.lightSphere, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.geometry.descriptor)
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
+
 		/*
 			SSAO
 		*/
@@ -826,8 +878,8 @@ public:
 			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorNormal),
 			// Binding 3: SSAO noise texture
 			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &textures.ssaoNoise.descriptor),
-			// Binding 4: Fragment shader uniform buffer
-			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.ssao.descriptor),
+			// Binding 5: Fragment shader uniform buffer
+			vks::initializers::writeDescriptorSet(descriptorSets.ssao, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 5, &uniformBuffers.ssao.descriptor)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -843,7 +895,7 @@ public:
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.ssaoBlur));
 		writeDescriptorSets = {
 			vks::initializers::writeDescriptorSet(descriptorSets.ssaoBlur, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorSsao),
-			vks::initializers::writeDescriptorSet(descriptorSets.ssaoBlur, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.ssaoBlur.descriptor),
+			vks::initializers::writeDescriptorSet(descriptorSets.ssaoBlur, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 5, &uniformBuffers.ssaoBlur.descriptor)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -854,6 +906,12 @@ public:
 			vks::initializers::descriptorImageInfo(
 				passes.geometry->sampler,
 				passes.geometry->attachments[2].view,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+		VkDescriptorImageInfo texDescriptorEmissive =
+			vks::initializers::descriptorImageInfo(
+				passes.geometry->sampler,
+				passes.geometry->attachments[3].view,
 				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
 		VkDescriptorImageInfo texDescriptorShadowMap =
@@ -876,12 +934,14 @@ public:
 			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorNormal),
 			// Binding 3: Albedo texture
 			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &texDescriptorAlbedo),
-			// Binding 4: Fragment shader uniform buffer
-			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.lighting.descriptor),
-			// Binding 5: Shadow map
-			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5, &texDescriptorShadowMap),
-			// Binding 6: Blured ao
-			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6, &texDescriptorSsaoBlur),
+			// Binding 4: Emissive texture
+			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4, &texDescriptorEmissive),
+			// Binding 5: Fragment shader uniform buffer
+			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 5, &uniformBuffers.lighting.descriptor),
+			// Binding 6: Shadow map
+			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6, &texDescriptorShadowMap),
+			// Binding 7: Blured ao
+			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 7, &texDescriptorSsaoBlur),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -902,8 +962,8 @@ public:
 			vks::initializers::writeDescriptorSet(descriptorSets.ssr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorNormal),
 			// Binding 3: Direct lighting color texture
 			vks::initializers::writeDescriptorSet(descriptorSets.ssr, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &texDescriptorDirectColor),
-			// Binding 4: Fragment shader uniform buffer
-			vks::initializers::writeDescriptorSet(descriptorSets.ssr, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.ssr.descriptor),
+			// Binding 5: Fragment shader uniform buffer
+			vks::initializers::writeDescriptorSet(descriptorSets.ssr, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 5, &uniformBuffers.ssr.descriptor)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -919,7 +979,7 @@ public:
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.ssrBlur));
 		writeDescriptorSets = {
 			vks::initializers::writeDescriptorSet(descriptorSets.ssrBlur, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorReflectColor),
-			vks::initializers::writeDescriptorSet(descriptorSets.ssrBlur, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.ssrBlur.descriptor),
+			vks::initializers::writeDescriptorSet(descriptorSets.ssrBlur, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 5, &uniformBuffers.ssrBlur.descriptor)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -938,8 +998,8 @@ public:
 			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorDirectColor),
 			// Binding 2: Reflect color blur texture
 			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorReflectColorBlur),
-			// Binding 4: Fragment shader uniform buffer
-			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.composition.descriptor)
+			// Binding 5: Fragment shader uniform buffer
+			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 5, &uniformBuffers.composition.descriptor)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -955,7 +1015,7 @@ public:
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
 		writeDescriptorSets = {
 			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorComposition),
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.tonemapping.descriptor),
+			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 5, &uniformBuffers.tonemapping.descriptor)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 	}
@@ -993,7 +1053,8 @@ public:
 		pipelineCI.pVertexInputState = vkglTF::Vertex::getPipelineVertexInputState({ vkglTF::VertexComponent::Position, vkglTF::VertexComponent::UV, vkglTF::VertexComponent::Color, vkglTF::VertexComponent::Normal, vkglTF::VertexComponent::Tangent });
 		rasterizationState.cullMode = VK_CULL_MODE_BACK_BIT;
 
-		std::array<VkPipelineColorBlendAttachmentState, 3> blendAttachmentStates = {
+		std::array<VkPipelineColorBlendAttachmentState, 4> blendAttachmentStates = {
+			vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE),
 			vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE),
 			vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE),
 			vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE)
@@ -1004,6 +1065,12 @@ public:
 		shaderStages[0] = loadShader(getShadersPath() + "final/spirv/geometry.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
 		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/geometry.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.geometry));
+
+		pipelineCI.pVertexInputState = vkglTF::Vertex::getPipelineVertexInputState({ vkglTF::VertexComponent::Position, vkglTF::VertexComponent::Normal });
+
+		shaderStages[0] = loadShader(getShadersPath() + "final/spirv/geometryLightSphere.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+		shaderStages[1] = loadShader(getShadersPath() + "final/spirv/geometryLightSphere.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.geometryLightSphere));
 
 		/*
 			SSAO
@@ -1237,7 +1304,6 @@ public:
 	{
 		uboGeometry.projection = camera.matrices.perspective;
 		uboGeometry.view = camera.matrices.view;
-		uboGeometry.model = glm::mat4(1.0f);
 		memcpy(uniformBuffers.geometry.mapped, &uboGeometry, sizeof(uboGeometry));
 	}
 
@@ -1346,12 +1412,14 @@ public:
 			"SSR Blur",
 			"Composition",
 			"Particles",
+			"Bloom",
 			"Tonemapping",
 			"ImGUI"
 		};
 		GPUTimer.OnCreate(vulkanDevice, std::move(labels));
 		prepareGraphicsPasses();
 		particles.init(vulkanDevice, this, passes.composition->renderPass);
+		bloom.init(vulkanDevice, this, &passes.composition->attachments[0], width, height);
 
 		initLights();
 		prepareUniformBuffers();
@@ -1390,6 +1458,8 @@ public:
 
 		// descriptor set related with those rendertarget
 		updateDescriptorSetOnResize();
+
+		bloom.onResized(&passes.composition->attachments[0], width, height);
 	}
 
 	void recreateIntermediateFramebuffer() {
@@ -1401,6 +1471,7 @@ public:
 		passes.geometry->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT); // position
 		passes.geometry->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT); // normal
 		passes.geometry->addAttachment(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT); // albedo
+		passes.geometry->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT); // emissive
 
 		// depth
 		vks::FramebufferAttachment depth;
@@ -1458,7 +1529,7 @@ public:
 		// Composition
 		//
 		passes.composition->clearBeforeRecreate(width, height);
-		passes.composition->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		passes.composition->addAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
 		passes.composition->createFrameBuffer();
 	}
 
@@ -1511,6 +1582,12 @@ public:
 				passes.geometry->attachments[2].view,
 				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
+		VkDescriptorImageInfo texDescriptorEmissive =
+			vks::initializers::descriptorImageInfo(
+				passes.geometry->sampler,
+				passes.geometry->attachments[3].view,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
 		VkDescriptorImageInfo texDescriptorSsaoBlur =
 			vks::initializers::descriptorImageInfo(
 				passes.ssaoBlur->sampler,
@@ -1524,8 +1601,10 @@ public:
 			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorNormal),
 			// Binding 3: Albedo texture
 			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &texDescriptorAlbedo),
+			// Binding 4: Emissive texture
+			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4, &texDescriptorEmissive),
 			// Binding 6: Blured ao
-			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6, &texDescriptorSsaoBlur)
+			vks::initializers::writeDescriptorSet(descriptorSets.lighting, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 7, &texDescriptorSsaoBlur)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -1596,6 +1675,11 @@ public:
 
 	virtual void OnUpdateUIOverlay(vks::UIOverlay *overlay)
 	{
+		if (overlay->header("Light Sphere")) {
+			if (ImGui::SliderFloat3("Transform", &lightSphereTrans.x, -10.0, 10.0)) {
+				pcLightSphere.model = glm::translate(glm::mat4(1.0), lightSphereTrans);
+			}
+		}
 		if (overlay->header("SSAO Settings")) {
 			if (overlay->sliderFloat("Radius", &uboSsao.radius, 0.0f, 2.0f)) {
 				updateUniformBufferSsao();

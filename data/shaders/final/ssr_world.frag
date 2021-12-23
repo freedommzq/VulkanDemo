@@ -5,7 +5,7 @@ layout (location = 0) in vec2 inUV;
 layout (location = 0) out vec4 outFragcolor;
 
 
-layout (binding = 4) uniform UBO 
+layout (binding = 5) uniform UBO 
 {
 	mat4 projection;
 	mat4 view;
