@@ -147,8 +147,6 @@ protected:
 	VkSubmitInfo submitInfo;
 	// Command buffers used for rendering
 	std::vector<VkCommandBuffer> drawCmdBuffers;
-	// Global render pass for frame buffer writes
-	VkRenderPass renderPass;
 	// List of available frame buffers (same as number of swap chain images)
 	std::vector<VkFramebuffer>frameBuffers;
 	// Active frame buffer index
@@ -175,6 +173,8 @@ public:
 	VkPipelineCache pipelineCache;
 	// Handle to the device graphics queue that command buffers are submitted to
 	VkQueue queue;
+	// Global render pass for frame buffer writes
+	VkRenderPass renderPass;
 
 	bool prepared = false;
 	bool resized = false;

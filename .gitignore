@@ -28,3 +28,8 @@ data/shaders/ArrayOfDescriptor/ArrayOfDescriptor.vert.spv
 *.ini
 data/shaders/pbr/pbr.frag.xxx
 data/shaders/pbr/pbr.vert.xxx
+external/cereal/
+data/shaders/loadPackage/quad.frag
+data/shaders/loadPackage/quad.vert
+data/shaders/loadPackage/spirv/quad.frag.spv
+data/shaders/loadPackage/spirv/quad.vert.spv
