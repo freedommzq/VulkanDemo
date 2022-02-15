@@ -1,11 +1,14 @@
 #version 450
 
+// Per-Vertex
 layout (location = 0) in vec3 inPos;
 layout (location = 1) in vec3 inNormal;
 layout (location = 2) in vec3 inUV0;
 layout (location = 3) in vec3 inUV1;
 layout (location = 4) in vec3 inUV2;
 layout (location = 5) in vec3 inUV3;
+// Per-Instance
+layout (location = 6) in vec3 inInstancePos;
 
 layout (location = 0) out vec2 outUV0;
 layout (location = 1) out vec2 outUV1;
@@ -35,7 +38,8 @@ void main()
 	outTexIndex2 = uint(inUV2.z);
 	outTexIndex3 = uint(inUV3.z);
 
-	gl_Position = ubo.projection * ubo.view * ubo.model * vec4(inPos, 1.0);
+	vec3 worldPos = (ubo.model * vec4(inPos, 1.0)).xyz + inInstancePos;
+	gl_Position = ubo.projection * ubo.view * vec4(worldPos, 1.0);
 
 	//outNormal = mat3(inverse(transpose(ubo.model))) * inNormal;
 }

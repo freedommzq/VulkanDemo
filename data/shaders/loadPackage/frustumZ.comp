@@ -1,0 +1,48 @@
+#version 450
+
+const uint CLUSTER_Z = 64;
+
+const float NEAR = 0.1;
+const float FAR = 1500.0;
+
+layout(binding = 0) uniform UniformCamera{
+	mat4 viewProjInv;
+	mat4 viewInv;
+}uCamera;
+
+layout(binding = 1, rgba16f) writeonly uniform image2D clusterFrustumZ;
+
+vec3 mul(mat4 m, vec4 v){
+	vec4 ret = m * v;
+	ret /= ret.w;
+	return ret.xyz;
+}
+
+vec4 calPlane(vec3 v1, vec3 v2, vec3 v3){
+	vec3 normal = normalize(cross(v3 - v1, v2 - v1));
+	return vec4(normal, -dot(normal, v1));
+}
+
+layout(local_size_x = 16) in;
+
+void main(){
+    if (gl_GlobalInvocationID.x >= CLUSTER_Z)
+        return;
+
+	float front = mix(NEAR, FAR, gl_GlobalInvocationID.x / float(CLUSTER_Z));
+	float back = mix(NEAR, FAR, (gl_GlobalInvocationID.x + 1.0) / CLUSTER_Z);
+
+	vec4 plane0 = calPlane(
+		mul(uCamera.viewInv, vec4(-1, -1, front, 1)),
+		mul(uCamera.viewInv, vec4(-1, 1, front, 1)),
+		mul(uCamera.viewInv, vec4(1, -1, front, 1))
+	);
+	vec4 plane1 = calPlane(
+		mul(uCamera.viewInv, vec4(-1, -1, back, 1)),
+		mul(uCamera.viewInv, vec4(1, -1, back, 1)),
+		mul(uCamera.viewInv, vec4(-1, 1, back, 1))
+	);
+
+	imageStore(clusterFrustumZ, ivec2(gl_GlobalInvocationID.x, 0), plane0);
+	imageStore(clusterFrustumZ, ivec2(gl_GlobalInvocationID.x, 1), plane1);
+}

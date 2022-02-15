@@ -12,7 +12,7 @@ public:
 
 	void init(vks::VulkanDevice* vkDevice, VulkanExampleBase* example, const std::string& filename);
 	void loadFromFile(const std::string& filename);
-	void draw(VkCommandBuffer cb, VkPipelineLayout pLayout);
+	void draw(VkCommandBuffer cb, VkPipelineLayout pLayout, uint32_t instanceCount = 1);
 	void destroy();
 private:
 	void prepareDescriptorSetLayout();

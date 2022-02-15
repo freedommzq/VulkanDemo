@@ -13,6 +13,7 @@
 #include "GPUTimestamps.h"
 #include "ParticleEffect.h"
 #include "Bloom.h"
+#include "PipelineStatistics.h"
 
 #define VERTEX_BUFFER_BIND_ID 0
 #define ENABLE_VALIDATION true
@@ -202,6 +203,8 @@ public:
 	GPUTimestamps GPUTimer;
 	std::vector<TimeStamp> timeStamps;
 
+	PipelineStatistics statistics;
+
 	ParticleEffect particles;
 
 	Bloom bloom;
@@ -270,6 +273,7 @@ public:
 		textures.ssaoNoise.destroy();
 
 		GPUTimer.OnDestroy();
+		statistics.destroy();
 		particles.destroy();
 		bloom.destroy();
 	}
@@ -284,10 +288,20 @@ public:
 		else {
 			vks::tools::exitFatal("Selected GPU does not support geometry shaders!", VK_ERROR_FEATURE_NOT_PRESENT);
 		}
+
 		// Enable anisotropic filtering if supported
 		if (deviceFeatures.samplerAnisotropy) {
 			enabledFeatures.samplerAnisotropy = VK_TRUE;
 		}
+
+		// Support for pipeline statistics is optional
+		if (deviceFeatures.pipelineStatisticsQuery) {
+			enabledFeatures.pipelineStatisticsQuery = VK_TRUE;
+		}
+		else {
+			vks::tools::exitFatal("Selected GPU does not support pipeline statistics!", VK_ERROR_FEATURE_NOT_PRESENT);
+		}
+
 		// Enable texture compression
 		if (deviceFeatures.textureCompressionBC) {
 			enabledFeatures.textureCompressionBC = VK_TRUE;
@@ -535,7 +549,7 @@ public:
 			renderPassBeginInfo.renderArea.extent.width = width;
 			renderPassBeginInfo.renderArea.extent.height = height;
 
-			// Geometry
+			// Geometry (Do Pipeline Statistics)
 			//
 			{
 				renderPassBeginInfo.renderPass = passes.geometry->renderPass;
@@ -548,7 +562,11 @@ public:
 				clearValues[3].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
 				clearValues[4].depthStencil = { 1.0f, 0 };
 
+				statistics.reset(drawCmdBuffers[i]);
+
 				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+				statistics.begin(drawCmdBuffers[i]);
 
 				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.geometry);
 				renderScene(drawCmdBuffers[i], false);
@@ -559,6 +577,8 @@ public:
 				vkCmdPushConstants(drawCmdBuffers[i], pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstModel), &pcLightSphere);
 
 				models.lightSphere.draw(drawCmdBuffers[i]);
+
+				statistics.end(drawCmdBuffers[i]);
 
 				vkCmdEndRenderPass(drawCmdBuffers[i]);
 
@@ -1394,6 +1414,7 @@ public:
 		VulkanExampleBase::submitFrame();
 
 		GPUTimer.GetQueryResult(&timeStamps);
+		statistics.getResult();
 	}
 
 	void prepare()
@@ -1417,6 +1438,7 @@ public:
 			"ImGUI"
 		};
 		GPUTimer.OnCreate(vulkanDevice, std::move(labels));
+		statistics.init(vulkanDevice);
 		prepareGraphicsPasses();
 		particles.init(vulkanDevice, this, passes.composition->renderPass);
 		bloom.init(vulkanDevice, this, &passes.composition->attachments[0], width, height);
@@ -1534,7 +1556,7 @@ public:
 	}
 
 	void updateDescriptorSetOnResize() {
-		std::vector<VkWriteDescriptorSet> writeDescriptorSets;
+		std::vector<VkWriteDescriptorSet> writeDescriptorSets; 
 
 		/*
 			SSAO
@@ -1727,6 +1749,12 @@ public:
 		if (overlay->header("GPU Profile")) {
 			for (auto& timeStamp : timeStamps) {
 				ImGui::Text("%-22s: %7.1f", timeStamp.m_label.c_str(), timeStamp.m_microseconds);
+			}
+		}
+		if (overlay->header("Pipeline statistics")) {
+			for (auto i = 0; i < statistics.pipelineStats.size(); i++) {
+				std::string caption = statistics.pipelineStatNames[i] + ": %d";
+				overlay->text(caption.c_str(), statistics.pipelineStats[i]);
 			}
 		}
 	}

@@ -1,0 +1,142 @@
+#version 450
+
+const uint CLUSTER_X = 36;
+const uint CLUSTER_Y = 20;
+const uint CLUSTER_Z = 64;
+
+const uint MAX_LIST_LENGTH = 256;
+
+layout(binding = 0, r16ui) writeonly uniform uimage3D clusterData;
+
+struct LightList {
+	uint indices[MAX_LIST_LENGTH];
+};
+layout(binding = 1) writeonly buffer LightLists {
+	LightList lightLists[];
+};
+
+struct PointLight {
+	vec4 positionRange;
+	vec4 colorIntensity;
+};
+layout(binding = 2) readonly buffer PointLights {
+	PointLight lights[];
+} uPointLights;
+
+struct SpotLight {
+	vec4 positionRange;
+	vec4 colorIntensity;
+	vec4 directionCutoff;
+};
+layout(binding = 3) readonly buffer SpotLights {
+	SpotLight lights[];
+} uSpotLights;
+
+layout(binding = 4, rgba16f) readonly uniform image3D clusterFrustumXY;
+layout(binding = 5, rgba16f) readonly uniform image2D clusterFrustumZ;
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Helper Functions
+//
+
+// Point Light
+//
+bool sphereOutsidePlane(vec4 sphere, vec4 plane){
+	return dot(vec4(sphere.xyz, 1.0), plane) + sphere.w < 0.0;
+}
+
+bool pointLightOutsideFrustum(PointLight light){
+	uvec3 clusterIndex = gl_GlobalInvocationID;
+	for(int i = 0; i < 4; ++i){
+		vec4 plane = imageLoad(clusterFrustumXY, ivec3(clusterIndex.xy, i));
+		if(sphereOutsidePlane(light.positionRange, plane)){
+			return true;
+		}
+	}
+	for(int j = 0; j < 2; ++j){
+		vec4 plane = imageLoad(clusterFrustumZ, ivec2(clusterIndex.z, j));
+		if(sphereOutsidePlane(light.positionRange, plane)){
+			return true;
+		}
+	}
+	return false;
+}
+
+// Spot Light
+bool pointOutsidePlane(vec3 p, vec4 plane){
+	return dot(vec4(p, 1.0), plane) < 0.0;
+}
+
+bool coneOutsidePlane(vec3 tip, float height, vec3 dir, float baseRadius, vec4 plane){
+	vec3 m = cross(cross(plane.xyz, dir), dir);
+	vec3 q = tip + dir * height - m * baseRadius;
+	return pointOutsidePlane(tip, plane) && pointOutsidePlane(q, plane);
+}
+
+bool spotLightOutsideFrustum(SpotLight light){
+	uvec3 clusterIndex = gl_GlobalInvocationID;
+	for(int i = 0; i < 4; ++i){
+		vec4 plane = imageLoad(clusterFrustumXY, ivec3(clusterIndex.xy, i));
+		if(coneOutsidePlane(
+			light.positionRange.xyz,
+			light.positionRange.w,
+			light.directionCutoff.xyz,
+			tan(acos(light.directionCutoff.w)) * light.positionRange.w,
+			plane
+			)
+		){
+			return true;
+		}
+	}
+	for(int j = 0; j < 2; ++j){
+		vec4 plane = imageLoad(clusterFrustumZ, ivec2(clusterIndex.z, j));
+		if(coneOutsidePlane(
+			light.positionRange.xyz,
+			light.positionRange.w,
+			light.directionCutoff.xyz,
+			tan(acos(light.directionCutoff.w)) * light.positionRange.w,
+			plane
+			)
+		){
+			return true;
+		}
+	}
+	return false;
+}
+
+// Main Function
+//
+void main(){
+    if (gl_GlobalInvocationID.x >= CLUSTER_X || gl_GlobalInvocationID.y >= CLUSTER_Y || gl_GlobalInvocationID.z >= CLUSTER_Z)
+        return;
+
+	uint index = gl_GlobalInvocationID.z * CLUSTER_Y * CLUSTER_X + gl_GlobalInvocationID.y * CLUSTER_X + gl_GlobalInvocationID.x;
+
+	uint offset = 0;
+	uint pointLightCount = 0;
+	uint spotLightCount = 0;
+
+	for(uint i = 0; i < uPointLights.lights.length(); ++i){
+		if(offset >= MAX_LIST_LENGTH) break;
+
+		if(!pointLightOutsideFrustum(uPointLights.lights[i])){
+			lightLists[index].indices[offset++] = i;
+			++pointLightCount;
+		}
+	}
+
+	for(uint i = 0; i < uSpotLights.lights.length(); ++i){
+		if(offset >= MAX_LIST_LENGTH) break;
+
+		SpotLight light = uSpotLights.lights[i];
+		if(!spotLightOutsideFrustum(uSpotLights.lights[i])){
+			lightLists[index].indices[offset++] = i;
+			++spotLightCount;
+		}
+	}
+
+	uint package = (pointLightCount << 8) + spotLightCount;
+
+	imageStore(clusterData, ivec3(gl_GlobalInvocationID), uvec4(package, 0, 0, 0));
+}

@@ -449,6 +449,9 @@ void vkglTF::Material::createDescriptorSet(VkDescriptorPool descriptorPool, VkDe
 	if (descriptorBindingFlags & DescriptorBindingFlags::ImageMetallicRoughness) {
 		imageDescriptors.push_back(metallicRoughnessTexture ? metallicRoughnessTexture->descriptor : emptyTexture->descriptor);
 	}
+	if (descriptorBindingFlags & DescriptorBindingFlags::ImageEmissive) {
+		imageDescriptors.push_back(emissiveTexture ? emissiveTexture->descriptor : emptyTexture->descriptor);
+	}
 
 	std::vector<VkWriteDescriptorSet> writeDescriptorSets(imageDescriptors.size());
 	for (size_t i = 0; i < imageDescriptors.size(); i++) {
@@ -1052,6 +1055,7 @@ void vkglTF::Model::loadMaterials(tinygltf::Model &gltfModel)
 		if (mat.additionalValues.find("normalTexture") != mat.additionalValues.end()) {
 			material.normalTexture = &textures[mat.additionalValues["normalTexture"].TextureIndex()];
 			material.texCoordSets.normal = mat.additionalValues["normalTexture"].TextureTexCoord();
+			assert(material.texCoordSets.normal == 0);
 		}
 
 		// Metallic roughness workflow
@@ -1064,6 +1068,16 @@ void vkglTF::Model::loadMaterials(tinygltf::Model &gltfModel)
 		if (mat.values.find("metallicRoughnessTexture") != mat.values.end()) {
 			material.metallicRoughnessTexture = &textures[mat.values["metallicRoughnessTexture"].TextureIndex()];
 			material.texCoordSets.metallicRoughness = mat.values["metallicRoughnessTexture"].TextureTexCoord();
+			assert(material.texCoordSets.metallicRoughness == 0);
+		}
+
+		if (mat.additionalValues.find("emissiveFactor") != mat.additionalValues.end()) {
+			material.emissiveFactor = glm::vec4(glm::make_vec3(mat.additionalValues["emissiveFactor"].ColorFactor().data()), 1.0);
+		}
+		if (mat.additionalValues.find("emissiveTexture") != mat.additionalValues.end()) {
+			material.emissiveTexture = &textures[mat.additionalValues["emissiveTexture"].TextureIndex()];
+			material.texCoordSets.emissive = mat.additionalValues["emissiveTexture"].TextureTexCoord();
+			assert(material.texCoordSets.emissive == 0);
 		}
 
 		if (mat.additionalValues.find("alphaMode") != mat.additionalValues.end()) {
@@ -1376,6 +1390,8 @@ void vkglTF::Model::loadFromFile(std::string filename, vks::VulkanDevice *device
 		++maxImageCountPerMaterial;
 	if (descriptorBindingFlags & DescriptorBindingFlags::ImageMetallicRoughness)
 		++maxImageCountPerMaterial;
+	if (descriptorBindingFlags & DescriptorBindingFlags::ImageEmissive)
+		++maxImageCountPerMaterial;
 
 	for (auto node : linearNodes) {
 		if (node->mesh) {
@@ -1430,6 +1446,9 @@ void vkglTF::Model::loadFromFile(std::string filename, vks::VulkanDevice *device
 			if (descriptorBindingFlags & DescriptorBindingFlags::ImageMetallicRoughness) {
 				setLayoutBindings.push_back(vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, static_cast<uint32_t>(setLayoutBindings.size())));
 			}
+			if (descriptorBindingFlags & DescriptorBindingFlags::ImageEmissive) {
+				setLayoutBindings.push_back(vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, static_cast<uint32_t>(setLayoutBindings.size())));
+			}
 			VkDescriptorSetLayoutCreateInfo descriptorLayoutCI{};
 			descriptorLayoutCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 			descriptorLayoutCI.bindingCount = static_cast<uint32_t>(setLayoutBindings.size());
@@ -1450,7 +1469,7 @@ void vkglTF::Model::bindBuffers(VkCommandBuffer commandBuffer)
 	buffersBound = true;
 }
 
-void vkglTF::Model::drawNode(Node *node, VkCommandBuffer commandBuffer, uint32_t renderFlags, VkPipelineLayout pipelineLayout, uint32_t bindImageSet)
+void vkglTF::Model::drawNode(Node *node, VkCommandBuffer commandBuffer, uint32_t renderFlags, VkPipelineLayout pipelineLayout, uint32_t bindImageSet, uint32_t pushConstantOffset)
 {
 	if (node->mesh) {
 		for (Primitive* primitive : node->mesh->primitives) {
@@ -1480,12 +1499,15 @@ void vkglTF::Model::drawNode(Node *node, VkCommandBuffer commandBuffer, uint32_t
 					pushConstBlockMaterial.alphaMaskCutoff = primitive->material.alphaCutoff;
 
 					// Metallic roughness workflow
+					pushConstBlockMaterial.physicalDescriptorTextureSet = primitive->material.metallicRoughnessTexture != nullptr ? primitive->material.texCoordSets.metallicRoughness : -1;
 					pushConstBlockMaterial.baseColorFactor = primitive->material.baseColorFactor;
 					pushConstBlockMaterial.metallicFactor = primitive->material.metallicFactor;
 					pushConstBlockMaterial.roughnessFactor = primitive->material.roughnessFactor;
-					pushConstBlockMaterial.PhysicalDescriptorTextureSet = primitive->material.metallicRoughnessTexture != nullptr ? primitive->material.texCoordSets.metallicRoughness : -1;
 
-					vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstBlockMaterial), &pushConstBlockMaterial);
+					pushConstBlockMaterial.emissiveTextureSet = primitive->material.emissiveTexture != nullptr ? primitive->material.texCoordSets.emissive : -1;
+					pushConstBlockMaterial.emissiveFactor = primitive->material.emissiveFactor;
+
+					vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, pushConstantOffset, sizeof(PushConstBlockMaterial), &pushConstBlockMaterial);
 				}
 
 				vkCmdDrawIndexed(commandBuffer, primitive->indexCount, 1, primitive->firstIndex, 0, 0);
@@ -1493,7 +1515,7 @@ void vkglTF::Model::drawNode(Node *node, VkCommandBuffer commandBuffer, uint32_t
 		}
 	}
 	for (auto& child : node->children) {
-		drawNode(child, commandBuffer, renderFlags, pipelineLayout);
+		drawNode(child, commandBuffer, renderFlags, pipelineLayout, bindImageSet, pushConstantOffset);
 	}
 }
 

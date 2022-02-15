@@ -35,7 +35,7 @@ void SimScene::loadFromFile(const std::string& filename)
 			format = VK_FORMAT_BC3_UNORM_BLOCK;
 			tex.fromBuffer((void*)img.imageData.data(), img.imageData.size(), format, img.s, img.t, m_vkDevice, m_example->queue);
 		}
-		else if(img.pixelFormat == 0x1907/* GL_RGB */ && img.type == 0x1401/* GL_UNSIGNED_BYTE */) {
+		else if (img.pixelFormat == 0x1907/* GL_RGB */ && img.type == 0x1401/* GL_UNSIGNED_BYTE */) {
 			format = VK_FORMAT_R8G8B8A8_UNORM;
 
 			std::vector<uint8_t> temp(img.s * img.t * 4);
@@ -50,6 +50,13 @@ void SimScene::loadFromFile(const std::string& filename)
 			vkGetPhysicalDeviceImageFormatProperties(m_vkDevice->physicalDevice, format, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 0, &prop);
 			*/
 		}
+		else if (img.pixelFormat == 0x1908/* GL_RGBA */ && img.type == 0x1401/* GL_UNSIGNED_BYTE */) {
+			format = VK_FORMAT_R8G8B8A8_UNORM;
+			tex.fromBuffer((void*)img.imageData.data(), img.imageData.size(), format, img.s, img.t, m_vkDevice, m_example->queue);
+		}
+		else {
+			format = VK_FORMAT_R8G8B8A8_UNORM;
+		}
 		
 		textures.push_back(tex);
 	}
@@ -57,6 +64,8 @@ void SimScene::loadFromFile(const std::string& filename)
 	geometries.reserve(inputData.geo.size());
 	for (SGeodata& g : inputData.geo)
 	{
+		if (g.vt.empty()) continue;
+
 		Geometry geometry;
 
 		std::vector<Geometry::Vertex> vertices;
@@ -91,7 +100,7 @@ void SimScene::loadFromFile(const std::string& filename)
 	}
 }
 
-void SimScene::draw(VkCommandBuffer cb, VkPipelineLayout pLayout)
+void SimScene::draw(VkCommandBuffer cb, VkPipelineLayout pLayout, uint32_t instanceCount)
 {
 	vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pLayout, 1, 1, &m_descriptorSet, 0, NULL);
 
@@ -100,7 +109,7 @@ void SimScene::draw(VkCommandBuffer cb, VkPipelineLayout pLayout)
 		vkCmdBindVertexBuffers(cb, 0, 1, &geometry.vertexBuffer.buffer, offsets);
 		vkCmdBindIndexBuffer(cb, geometry.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-		vkCmdDrawIndexed(cb, geometry.indexCount, 1, 0, 0, 0);
+		vkCmdDrawIndexed(cb, geometry.indexCount, instanceCount, 0, 0, 0);
 	}
 }
 

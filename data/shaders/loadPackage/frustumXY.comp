@@ -1,0 +1,60 @@
+#version 450
+
+const uint CLUSTER_X = 36;
+const uint CLUSTER_Y = 20;
+
+layout(binding = 0) uniform UniformCamera{
+	mat4 viewProjInv;
+	mat4 viewInv;
+}uCamera;
+
+layout(binding = 1, rgba16f) writeonly uniform image3D clusterFrustumXY;
+
+vec3 mul(mat4 m, vec4 v){
+	vec4 ret = m * v;
+	ret /= ret.w;
+	return ret.xyz;
+}
+
+vec4 calPlane(vec3 v1, vec3 v2, vec3 v3){
+	vec3 normal = normalize(cross(v3 - v1, v2 - v1));
+	return vec4(normal, -dot(normal, v1));
+}
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+void main(){
+    if (gl_GlobalInvocationID.x >= CLUSTER_X || gl_GlobalInvocationID.y >= CLUSTER_Y)
+        return;
+
+	vec2 topLeft = gl_GlobalInvocationID.xy / vec2(CLUSTER_X, CLUSTER_Y);
+	vec2 bottomRight = topLeft + 1.0f / vec2(CLUSTER_X, CLUSTER_Y);
+	topLeft = 2.0f * topLeft - 1.0f;
+	bottomRight = 2.0f * bottomRight - 1.0f;
+
+	vec4 plane0 = calPlane(
+		mul(uCamera.viewProjInv, vec4(-1, bottomRight.y, 0, 1)),
+		mul(uCamera.viewProjInv, vec4(-1, bottomRight.y, 1, 1)),
+		mul(uCamera.viewProjInv, vec4(1, bottomRight.y, 0, 1))
+	);
+	vec4 plane1 = calPlane(
+		mul(uCamera.viewProjInv, vec4(-1, topLeft.y, 0, 1)),
+		mul(uCamera.viewProjInv, vec4(1, topLeft.y, 0, 1)),
+		mul(uCamera.viewProjInv, vec4(-1, topLeft.y, 1, 1))
+	);
+	vec4 plane2 = calPlane(
+		mul(uCamera.viewProjInv, vec4(topLeft.x, -1, 0, 1)),
+		mul(uCamera.viewProjInv, vec4(topLeft.x, -1, 1, 1)),
+		mul(uCamera.viewProjInv, vec4(topLeft.x, 1, 0, 1))
+	);
+	vec4 plane3 = calPlane(
+		mul(uCamera.viewProjInv, vec4(bottomRight.x, -1, 0, 1)),
+		mul(uCamera.viewProjInv, vec4(bottomRight.x, 1, 0, 1)),
+		mul(uCamera.viewProjInv, vec4(bottomRight.x, -1, 1, 1))
+	);
+
+	imageStore(clusterFrustumXY, ivec3(gl_GlobalInvocationID.xy, 0), plane0);
+	imageStore(clusterFrustumXY, ivec3(gl_GlobalInvocationID.xy, 1), plane1);
+	imageStore(clusterFrustumXY, ivec3(gl_GlobalInvocationID.xy, 2), plane2);
+	imageStore(clusterFrustumXY, ivec3(gl_GlobalInvocationID.xy, 3), plane3);
+}

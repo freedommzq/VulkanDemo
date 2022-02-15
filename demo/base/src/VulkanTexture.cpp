@@ -497,6 +497,85 @@ namespace vks
 		updateDescriptor();
 	}
 
+	void Texture2D::createEmpty(vks::VulkanDevice* device, VkQueue transferQueue, VkExtent2D extent, VkFormat format, VkImageUsageFlags usage, VkImageLayout layout)
+	{
+		this->device = device;
+		imageLayout = layout;
+
+		// Image
+		//
+		VkImageCreateInfo imageInfo = vks::initializers::imageCreateInfo();
+		imageInfo.imageType = VK_IMAGE_TYPE_2D;
+		imageInfo.format = format;
+		imageInfo.extent = { extent.width, extent.height, 1 };
+		imageInfo.mipLevels = 1;
+		imageInfo.arrayLayers = 1;
+		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+		imageInfo.usage = usage;
+		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		VK_CHECK_RESULT(vkCreateImage(device->logicalDevice, &imageInfo, nullptr, &image));
+
+		VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+		VkMemoryRequirements memReq;
+		vkGetImageMemoryRequirements(device->logicalDevice, image, &memReq);
+		memAllocInfo.allocationSize = memReq.size;
+		memAllocInfo.memoryTypeIndex = device->getMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &deviceMemory));
+
+		VK_CHECK_RESULT(vkBindImageMemory(device->logicalDevice, image, deviceMemory, 0));
+
+		// Image View
+		//
+		VkImageViewCreateInfo viewCreateInfo = vks::initializers::imageViewCreateInfo();
+		viewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		viewCreateInfo.format = format;
+		viewCreateInfo.components = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A };
+		viewCreateInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		viewCreateInfo.subresourceRange.levelCount = 1;
+		viewCreateInfo.image = image;
+		VK_CHECK_RESULT(vkCreateImageView(device->logicalDevice, &viewCreateInfo, nullptr, &view));
+
+		// Sampler
+		//
+		VkSamplerCreateInfo samplerCreateInfo = vks::initializers::samplerCreateInfo();
+		samplerCreateInfo.magFilter = VK_FILTER_LINEAR;
+		samplerCreateInfo.minFilter = VK_FILTER_LINEAR;
+		samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerCreateInfo.mipLodBias = 0.0f;
+		samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
+		samplerCreateInfo.minLod = 0.0f;
+		samplerCreateInfo.maxLod = 0.0f;
+		samplerCreateInfo.maxAnisotropy = 1.0f;
+		samplerCreateInfo.anisotropyEnable = VK_FALSE;
+		samplerCreateInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+		VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &sampler));
+
+		updateDescriptor();
+
+		{
+			VkCommandBuffer copyCmd = device->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+			VkImageSubresourceRange subresourceRange = {};
+			subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			subresourceRange.baseMipLevel = 0;
+			subresourceRange.levelCount = 1;
+			subresourceRange.layerCount = 1;
+
+			vks::tools::setImageLayout(
+				copyCmd,
+				image,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				layout,
+				subresourceRange);
+
+			device->flushCommandBuffer(copyCmd, transferQueue);
+		}
+	}
+
 	/**
 	* Load a 2D texture array including all mip levels
 	*
@@ -870,4 +949,82 @@ namespace vks
 		updateDescriptor();
 	}
 
+	void Texture3D::createEmpty(vks::VulkanDevice* device, VkQueue transferQueue, VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageLayout layout)
+	{
+		this->device = device;
+		imageLayout = layout;
+
+		// Image
+		//
+		VkImageCreateInfo imageInfo = vks::initializers::imageCreateInfo();
+		imageInfo.imageType = VK_IMAGE_TYPE_3D;
+		imageInfo.format = format;
+		imageInfo.extent = extent;
+		imageInfo.mipLevels = 1;
+		imageInfo.arrayLayers = 1;
+		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+		imageInfo.usage = usage;
+		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		VK_CHECK_RESULT(vkCreateImage(device->logicalDevice, &imageInfo, nullptr, &image));
+
+		VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+		VkMemoryRequirements memReq;
+		vkGetImageMemoryRequirements(device->logicalDevice, image, &memReq);
+		memAllocInfo.allocationSize = memReq.size;
+		memAllocInfo.memoryTypeIndex = device->getMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &deviceMemory));
+
+		VK_CHECK_RESULT(vkBindImageMemory(device->logicalDevice, image, deviceMemory, 0));
+
+		// Image View
+		//
+		VkImageViewCreateInfo viewCreateInfo = vks::initializers::imageViewCreateInfo();
+		viewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+		viewCreateInfo.format = format;
+		viewCreateInfo.components = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A };
+		viewCreateInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		viewCreateInfo.subresourceRange.levelCount = 1;
+		viewCreateInfo.image = image;
+		VK_CHECK_RESULT(vkCreateImageView(device->logicalDevice, &viewCreateInfo, nullptr, &view));
+
+		// Sampler
+		//
+		VkSamplerCreateInfo samplerCreateInfo = vks::initializers::samplerCreateInfo();
+		samplerCreateInfo.magFilter = VK_FILTER_LINEAR;
+		samplerCreateInfo.minFilter = VK_FILTER_LINEAR;
+		samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerCreateInfo.mipLodBias = 0.0f;
+		samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
+		samplerCreateInfo.minLod = 0.0f;
+		samplerCreateInfo.maxLod = 0.0f;
+		samplerCreateInfo.maxAnisotropy = 1.0f;
+		samplerCreateInfo.anisotropyEnable = VK_FALSE;
+		samplerCreateInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+		VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &sampler));
+
+		updateDescriptor();
+
+		{
+			VkCommandBuffer copyCmd = device->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+			VkImageSubresourceRange subresourceRange = {};
+			subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			subresourceRange.baseMipLevel = 0;
+			subresourceRange.levelCount = 1;
+			subresourceRange.layerCount = 1;
+
+			vks::tools::setImageLayout(
+				copyCmd,
+				image,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				layout,
+				subresourceRange);
+
+			device->flushCommandBuffer(copyCmd, transferQueue);
+		}
+	}
 }

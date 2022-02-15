@@ -36,7 +36,7 @@ class Texture
 	VkImageLayout         imageLayout;
 	VkDeviceMemory        deviceMemory;
 	VkImageView           view;
-	uint32_t              width, height;
+	uint32_t              width, height, depth;
 	uint32_t              mipLevels;
 	uint32_t              layerCount;
 	VkDescriptorImageInfo descriptor;
@@ -69,6 +69,7 @@ class Texture2D : public Texture
 	    VkFilter           filter          = VK_FILTER_LINEAR,
 	    VkImageUsageFlags  imageUsageFlags = VK_IMAGE_USAGE_SAMPLED_BIT,
 	    VkImageLayout      imageLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	void createEmpty(vks::VulkanDevice* device, VkQueue transferQueue, VkExtent2D extent, VkFormat format, VkImageUsageFlags usage, VkImageLayout layout);
 };
 
 class Texture2DArray : public Texture
@@ -93,5 +94,11 @@ class TextureCubeMap : public Texture
 	    VkQueue            copyQueue,
 	    VkImageUsageFlags  imageUsageFlags = VK_IMAGE_USAGE_SAMPLED_BIT,
 	    VkImageLayout      imageLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+};
+
+class Texture3D : public Texture
+{
+public:
+	void createEmpty(vks::VulkanDevice* device, VkQueue transferQueue, VkExtent3D extent, VkFormat format, VkImageUsageFlags usage, VkImageLayout layout);
 };
 }        // namespace vks
